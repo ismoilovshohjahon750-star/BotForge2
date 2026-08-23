@@ -337,16 +337,6 @@ export const Admin: React.FC = () => {
     }
   };
 
-  if (!isAdmin) {
-    return (
-      <div className="container mx-auto px-4 py-20 text-center">
-        <Shield className="w-16 h-16 text-destructive mx-auto mb-4 opacity-80" />
-        <h2 className="text-2xl font-bold text-destructive">Ruxsat berilmagan</h2>
-        <p className="text-muted-foreground mt-2">Ushbu bo'lim faqat tizim admini uchun mo'ljallangan.</p>
-      </div>
-    );
-  }
-
   // Deduplicate profiles by email address so each user appears only once
   const uniqueProfiles = React.useMemo(() => {
     const map = new Map<string, Profile>();
@@ -407,6 +397,16 @@ export const Admin: React.FC = () => {
       );
     });
   }, [bots, searchQuery, userLookupMap]);
+
+  if (!isAdmin) {
+    return (
+      <div className="container mx-auto px-4 py-20 text-center">
+        <Shield className="w-16 h-16 text-destructive mx-auto mb-4 opacity-80" />
+        <h2 className="text-2xl font-bold text-destructive">Ruxsat berilmagan</h2>
+        <p className="text-muted-foreground mt-2">Ushbu bo'lim faqat tizim admini uchun mo'ljallangan.</p>
+      </div>
+    );
+  }
 
   const totalUsers = uniqueProfiles.length;
   const proUsersCount = Object.values(subscriptions).filter(p => p === 'pro').length;

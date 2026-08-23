@@ -6,6 +6,7 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   sendEmailVerification, 
+  sendPasswordResetEmail,
   signInWithPopup,
   signInWithRedirect 
 } from 'firebase/auth';
@@ -47,31 +48,7 @@ export const Auth: React.FC = () => {
   // Email verification state variables for displaying designed Uzbek mail body
   const [verificationSent, setVerificationSent] = useState<boolean>(false);
   const [sentEmailAddress, setSentEmailAddress] = useState<string>('');
-
-  // Local redirect if user is logged in
-  if (user && !verificationSent) {
-    return (
-      <div className="flex items-center justify-center min-h-[85vh] bg-[#07070a] px-4">
-        <div className="absolute inset-0 bg-radial-[circle_at_center,rgba(16,185,129,0.06),transparent_60%] pointer-events-none" />
-        <Card className="w-full max-w-md bg-[#0d0d14] border-emerald-500/20 text-center relative overflow-hidden shadow-2xl">
-          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-500" />
-          <CardHeader className="pt-8">
-            <div className="mx-auto w-14 h-14 bg-emerald-500/10 rounded-full flex items-center justify-center mb-4">
-              <CheckCircle2 className="w-8 h-8 text-emerald-400" />
-            </div>
-            <CardTitle className="text-2xl font-black text-white uppercase tracking-tight">Xush Kelibsiz!</CardTitle>
-            <CardDescription className="text-slate-400">Siz allaqachon tizimga muvaffaqiyatli kirgansiz.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 pb-8">
-            <p className="text-xs text-slate-500 font-mono">Sessiya ID: {user.uid.slice(0, 16)}...</p>
-            <Button className="w-full py-6 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold shadow-lg shadow-emerald-500/10" onClick={() => window.location.href = '/dashboard'}>
-              Boshqaruv Paneliga O'tish <ArrowRight className="w-4 h-4 ml-2" />
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  const [resendCooldown, setResendCooldown] = useState<number>(0);
 
   // Handle Google OAuth
   const handleGoogleLogin = async () => {
@@ -123,40 +100,36 @@ export const Auth: React.FC = () => {
 
       setLoading(true);
       try {
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
         const currentUser = userCredential.user;
         
-        // Dispatch official verification email
+        // Dispatch official verification email with return URL
         try {
-          await sendEmailVerification(currentUser);
-          setSentEmailAddress(email);
+          await sendEmailVerification(currentUser, {
+            url: window.location.origin + '/dashboard',
+            handleCodeInApp: false
+          });
+          setSentEmailAddress(email.trim());
           setVerificationSent(true);
-          toast.success("Tasdiqlash xati muvaffaqiyatli yuborildi!");
+          toast.success("Tasdiqlash havolasi kiritilgan emailingizga yuborildi! Pochtani tekshiring.");
         } catch (verifError: any) {
-          console.error(verifError);
-          toast.error("Tasdiqlash xatini yuborishda xatolik, lekin hisob yaratildi: " + verifError.message);
-          setSentEmailAddress(email);
+          console.warn("sendEmailVerification notice:", verifError);
+          setSentEmailAddress(email.trim());
           setVerificationSent(true);
+          toast.info("Hisob yaratildi. Tasdiqlash xati yuborildi.");
         }
       } catch (error: any) {
-        console.error(error);
         if (error.code === 'auth/email-already-in-use') {
-          // Attempt automatic sign-in if account exists
-          try {
-            await signInWithEmailAndPassword(auth, email, password);
-            toast.success("Ushbu email bilan hisob mavjud. Tizimga kirdingiz!");
-            window.location.href = '/dashboard';
-            return;
-          } catch (loginErr: any) {
-            setIsSignUp(false);
-            toast.error("Ushbu email allaqachon ro'yxatdan o'tgan! Kirish oynasiga o'tkazildingiz. Parolingizni tekshirib kiring.");
-          }
+          setIsSignUp(false);
+          toast.error("Ushbu email allaqachon ro'yxatdan o'tgan! Kirish oynasiga o'tkazildingiz. Parolingizni kiriting yoki 'Parolni unutdingizmi?' orqali tiklang.");
         } else if (error.code === 'auth/user-disabled') {
           toast.error("Ushbu hisob admin tomonidan cheklangan. Iltimos qo'llab-quvvatlash xizmatiga murojaat qiling.");
         } else if (error.code === 'auth/invalid-email') {
           toast.error("Email manzili noto'g'ri kiritilgan!");
+        } else if (error.code === 'auth/weak-password') {
+          toast.error("Parol juda oddiy! Kamida 6 ta belgidan iborat kuchliroq parol kiriting.");
         } else {
-          toast.error(error.message);
+          toast.error("Xatolik: " + (error.message || "Ro'yxatdan o'tishda xatolik yuz berdi"));
         }
       } finally {
         setLoading(false);
@@ -164,17 +137,31 @@ export const Auth: React.FC = () => {
     } else {
       setLoading(true);
       try {
-        await signInWithEmailAndPassword(auth, email, password);
-        toast.success("Tizimga muvaffaqiyatli kirdingiz!");
+        const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const loggedUser = userCredential.user;
+        
+        if (loggedUser && !loggedUser.emailVerified) {
+          toast.info("Tizimga kirdingiz. Emailingiz hali tasdiqlanmagan.");
+        } else {
+          toast.success("Tizimga muvaffaqiyatli kirdingiz!");
+        }
         window.location.href = '/dashboard';
       } catch (error: any) {
-        console.error(error);
         if (error.code === 'auth/user-disabled') {
           toast.error("Ushbu hisob admin tomonidan cheklangan. Iltimos qo'llab-quvvatlash xizmatiga murojaat qiling.");
-        } else if (error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
-          toast.error("Email yoki kiritilgan parol noto'g'ri!");
+        } else if (
+          error.code === 'auth/invalid-credential' || 
+          error.code === 'auth/user-not-found' || 
+          error.code === 'auth/wrong-password' ||
+          error.code === 'auth/invalid-login-credentials'
+        ) {
+          toast.error("Email yoki parol noto'g'ri! Iltimos tekshirib qaytadan kiring yoki 'Parolni unutdingizmi?' orqali parolni tiklang.");
+        } else if (error.code === 'auth/invalid-email') {
+          toast.error("Email manzili noto'g'ri kiritilgan!");
+        } else if (error.code === 'auth/too-many-requests') {
+          toast.error("Bir necha marta xato urinish bo'ldi. Iltimos birozdan so'ng qayta urinib ko'ring yoki 'Parolni unutdingizmi?' orqali yangilang.");
         } else {
-          toast.error("Xatolik: " + error.message);
+          toast.error("Kirishda xatolik: " + (error.message || "Xatolik yuz berdi"));
         }
       } finally {
         setLoading(false);
@@ -182,18 +169,89 @@ export const Auth: React.FC = () => {
     }
   };
 
+  // Handle Forgot Password
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      toast.info("Iltimos, avval Email Manzil maydoniga emailingizni kiriting va so'ng 'Parolni unutdingizmi?' tugmasini bosing.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim(), {
+        url: window.location.origin + '/auth',
+        handleCodeInApp: false
+      });
+      toast.success(`${email.trim()} manziliga parolni tiklash havolasi yuborildi! Pochtani tekshiring.`);
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+        toast.error("Ushbu email bilan ro'yxatdan o'tgan foydalanuvchi topilmadi.");
+      } else if (err.code === 'auth/invalid-email') {
+        toast.error("Email manzili noto'g'ri formatda.");
+      } else {
+        toast.error("Parolni tiklashda xatolik: " + (err.message || "Xatolik yuz berdi"));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Resend Verification Email Functionality
   const handleResendVerification = async () => {
+    if (resendCooldown > 0) return;
     if (auth.currentUser) {
       try {
-        await sendEmailVerification(auth.currentUser);
-        toast.success("Tasdiqlash xati qayta yuborildi!");
+        await sendEmailVerification(auth.currentUser, {
+          url: window.location.origin + '/dashboard',
+          handleCodeInApp: false
+        });
+        toast.success("Tasdiqlash havolasi qayta yuborildi! Pochtani tekshiring.");
+        setResendCooldown(60);
+        const timer = setInterval(() => {
+          setResendCooldown((prev) => {
+            if (prev <= 1) {
+              clearInterval(timer);
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
       } catch (e: any) {
-        toast.error("Xat yuborishda xatolik: " + e.message);
+        toast.error("Xat yuborishda xatolik: " + (e.message || 'Xatolik yuz berdi'));
       }
     } else {
-      toast.error("Foydalanuvchi tizimda topilmadi, qaytadan urinib ko'ring.");
+      toast.error("Foydalanuvchi tizimda topilmadi, qaytadan ro'yxatdan o'ting.");
     }
+  };
+
+  // Check verification status live
+  const handleCheckVerification = async () => {
+    if (auth.currentUser) {
+      try {
+        await auth.currentUser.reload();
+        if (auth.currentUser.emailVerified) {
+          toast.success("Email muvaffaqiyatli tasdiqlandi! Boshqaruv paneliga yo'naltirilmoqda...");
+          setTimeout(() => {
+            window.location.href = '/dashboard';
+          }, 800);
+        } else {
+          toast.warning("Email hali tasdiqlanmagan. Iltimos, emailingizga kelgan havolani bosing va qayta tekshiring.");
+        }
+      } catch (err: any) {
+        toast.error("Tekshirishda xatolik: " + err.message);
+      }
+    } else {
+      window.location.href = '/dashboard';
+    }
+  };
+
+  // Quick email provider link helper
+  const getEmailProviderUrl = (emailAddr: string) => {
+    const domain = emailAddr.split('@')[1]?.toLowerCase() || '';
+    if (domain.includes('gmail')) return 'https://mail.google.com';
+    if (domain.includes('mail.ru') || domain.includes('bk.ru') || domain.includes('inbox.ru')) return 'https://e.mail.ru';
+    if (domain.includes('yandex') || domain.includes('ya.ru')) return 'https://mail.yandex.com';
+    if (domain.includes('outlook') || domain.includes('hotmail')) return 'https://outlook.live.com';
+    return 'https://' + domain;
   };
 
   return (
@@ -207,121 +265,94 @@ export const Auth: React.FC = () => {
       {/* Main card logic - centered layout with focus (Promotional block removed per user request) */}
       <div className="w-full max-w-md relative z-10">
         
-        {verificationSent ? (
-            /* Email Verification Portal and Beautiful Uzbek Message Preview */
+        {user && !verificationSent ? (
+          <Card className="w-full bg-[#0d0d14]/90 backdrop-blur-xl border border-emerald-500/20 text-center relative overflow-hidden shadow-2xl rounded-3xl">
+            <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 to-teal-500" />
+            <CardHeader className="pt-8">
+              <div className="mx-auto w-14 h-14 bg-emerald-500/10 rounded-full flex items-center justify-center mb-4 border border-emerald-500/20">
+                <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+              </div>
+              <CardTitle className="text-2xl font-black text-white uppercase tracking-tight">Xush Kelibsiz!</CardTitle>
+              <CardDescription className="text-slate-400">Siz allaqachon tizimga muvaffaqiyatli kirgansiz.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 pb-8 px-6">
+              <p className="text-xs text-slate-500 font-mono">Sessiya ID: {user.uid.slice(0, 16)}...</p>
+              <Button className="w-full py-6 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold shadow-lg shadow-emerald-500/10 cursor-pointer" onClick={() => window.location.href = '/dashboard'}>
+                Boshqaruv Paneliga O'tish <ArrowRight className="w-4 h-4 ml-2" />
+              </Button>
+            </CardContent>
+          </Card>
+        ) : verificationSent ? (
+            /* Email Verification Portal and Beautiful Uzbek Message Card */
             <Card className="w-full bg-[#0d0d14]/90 backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl overflow-hidden animate-fade-in relative">
-              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-500" />
+              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-500" />
               
-              <CardHeader className="text-center pb-2">
-                <div className="mx-auto w-14 h-14 bg-indigo-500/10 rounded-full flex items-center justify-center mb-3 text-indigo-400 relative">
-                  <span className="absolute inset-0 rounded-full bg-indigo-500/5 animate-ping" />
-                  <Mail className="w-6 h-6" />
+              <CardHeader className="text-center pb-2 pt-6">
+                <div className="mx-auto w-16 h-16 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-center justify-center mb-3 text-emerald-400 relative">
+                  <span className="absolute inset-0 rounded-2xl bg-emerald-500/10 animate-ping" />
+                  <Mail className="w-8 h-8 text-emerald-400 relative z-10" />
                 </div>
-                <CardTitle className="text-xl font-bold text-white">Tasdiqlash Xati Yuborildi!</CardTitle>
-                <CardDescription className="text-xs text-slate-400">
-                  Siz kiritgan <span className="text-indigo-400 font-mono break-all font-semibold">{sentEmailAddress}</span> manziliga faollashtirish xati yo'llandi.
+                <CardTitle className="text-2xl font-black text-white uppercase tracking-tight">Tasdiqlash Havolasi Yuborildi!</CardTitle>
+                <CardDescription className="text-xs text-slate-400 mt-1">
+                  Siz kiritgan <span className="text-emerald-400 font-mono break-all font-semibold">{sentEmailAddress}</span> manziliga faollashtirish havolasi yo'llandi.
                 </CardDescription>
               </CardHeader>
 
-              <CardContent className="space-y-6">
+              <CardContent className="space-y-5 px-6 pb-8">
                 
-                {/* Visual Section: Uzbek Custom confirmation email design */}
-                <div className="space-y-2 text-left">
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1">
-                      <Send className="w-3 h-3 text-emerald-400" /> Emailingizga boradigan xat ko'rinishi
-                    </span>
-                    <span className="px-1.5 py-0.5 rounded text-[8.5px] font-mono font-bold bg-[#1d1d2b] text-yellow-500">
-                      O'zbek tili modifikatori
-                    </span>
+                {/* Step by step action guide */}
+                <div className="bg-[#12121c] border border-white/5 rounded-2xl p-4 space-y-3 text-xs text-slate-300">
+                  <div className="font-bold text-white flex items-center gap-2 text-xs uppercase tracking-wide">
+                    <Sparkles className="w-4 h-4 text-emerald-400" /> Hisobingizni faollashtirish uchun:
                   </div>
-
-                  {/* High fidelity simulation card of the Verification Email */}
-                  <div className="bg-[#050508] border border-white/5 rounded-xl p-4 md:p-5 shadow-inner relative overflow-hidden text-slate-300 space-y-4">
-                    
-                    {/* Fake Email Header */}
-                    <div className="flex justify-between items-center pb-3 border-b border-white/5 text-[10px] text-slate-400 font-mono">
-                      <div>
-                        <strong>Yuboruvchi:</strong> security-noreply@cloudbot.io
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Clock className="w-2.5 h-2.5" /> 1 soniya avval
-                      </div>
-                    </div>
-
-                    {/* Email template content customized in Uzbek as requested */}
-                    <div className="space-y-3.5 text-xs text-slate-300 leading-relaxed">
-                      
-                      <div className="font-extrabold text-white text-sm flex items-center gap-1.5">
-                        <LogoIcon size={20} />
-                        <span>CloudBot Platformasiga Xush Kelibsiz!</span>
-                      </div>
-                      
-                      <p>Xayrli kun, hurmatli <strong>{sentEmailAddress.split('@')[0]}</strong>!</p>
-                      
-                      <p>
-                        CloudBot bepul bulutli Telegram botlar yaratish stendida ro'yxatdan o'tganingiz uchun tashakkur bildiramiz. Loyihalarni hostingga muvaffaqiyatli ulash hamda maxfiy <code className="text-emerald-400 font-mono px-1 py-0.2 bg-white/5 text-[11px] rounded">.env</code> sirlarini xavfsiz kiritishdan oldin, profilingizni faollashtirishingiz lozim.
-                      </p>
-
-                      {/* Mock call to action button in verification email */}
-                      <div className="py-2.5 text-center">
-                        <a 
-                          href="#"
-                          onClick={(e) => { e.preventDefault(); toast.info("Bu xatning namunaviy ko'rinishi bo'lib, tasdiqlash uchun haqiqiy pochtangizga kelgan xat ichidagi tugmani bosing!"); }}
-                          className="inline-flex items-center gap-1.5 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-extrabold text-[11.5px] transition-all cursor-pointer shadow-md hover:shadow-emerald-500/10"
-                        >
-                          Email Manzilini Tasdiqlash <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
-                      </div>
-
-                      <div className="p-3 bg-white/[0.02] border border-white/5 rounded-lg space-y-1 text-[11px] text-slate-400">
-                        <div className="font-bold text-white flex items-center gap-1">
-                          <HelpCircle className="w-3 h-3 text-indigo-400" /> Nima uchun bu juda muhim?
-                        </div>
-                        <p>
-                          Botlar boshqaruv xavfsizligi butunlay profilingizga bog'langan. Tasdiqlangan hisob egasi sifatida siz yuqori tezlikdagi serverga, cheksiz ma'lumotlar uzatish drayverlariga ega bo'lasiz.
-                        </p>
-                      </div>
-
-                      <div className="pt-2 border-t border-white/5 text-[10px] text-slate-500 font-mono text-center">
-                        © 2026 CloudBot Inc. Toshkent, O'zbekiston.
-                      </div>
-                    </div>
-
-                  </div>
+                  <ol className="space-y-2 text-slate-400 text-xs list-decimal list-inside leading-relaxed">
+                    <li><strong className="text-slate-200">Email pochtangizni</strong> oching.</li>
+                    <li><strong className="text-slate-200">Botly</strong> tomonidan yuborilgan tasdiqlash xatini toping.</li>
+                    <li>Xat ichidagi <strong className="text-emerald-400">Tasdiqlash havolasini</strong> bosing.</li>
+                    <li>Tasdiqlagandan so'ng pastdagi <strong>"Tasdiqlanganini tekshirish"</strong> tugmasini bosing.</li>
+                  </ol>
                 </div>
+
+                {/* Direct Open Mailbox Button */}
+                {sentEmailAddress && (
+                  <a
+                    href={getEmailProviderUrl(sentEmailAddress)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-xs transition-all shadow-sm group"
+                  >
+                    <ExternalLink className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                    <span>Pochtani ochish ({sentEmailAddress.split('@')[1] || 'Email'})</span>
+                  </a>
+                )}
 
                 {/* Verification Guidance Alerts */}
-                <div className="p-3.5 bg-yellow-500/5 border border-yellow-500/10 rounded-xl text-[11.5px] text-yellow-400 flex items-start gap-2.5 leading-relaxed">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div className="p-3.5 bg-yellow-500/5 border border-yellow-500/10 rounded-xl text-[11.5px] text-yellow-400/90 flex items-start gap-2.5 leading-relaxed">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-yellow-400" />
                   <div>
-                    <strong className="block text-white">Xatni topa olmadingizmi?</strong>
-                    Iltimos, pochtangizning <strong>Spam (Keraksiz xatlar)</strong> yoki <strong>Promotions (Reklama)</strong> qismlarini tekshirib ko'ring. Ba'zida xavfsizlik filtrlari sabab xat shu bo'limlarga tushishi mumkin.
+                    <strong className="block text-white mb-0.5">Xat kelmadimi?</strong>
+                    Iltimos, pochtangizning <strong>Spam (Keraksiz xatlar)</strong> yoki <strong>Promotions (Reklama)</strong> bo'limlarini ham tekshirib ko'ring.
                   </div>
                 </div>
 
-                {/* Next Steps Buttons */}
-                <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {/* Action Buttons */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <Button 
                     type="button" 
                     variant="outline" 
                     onClick={handleResendVerification}
-                    className="py-5 border-white/10 hover:bg-white/5 rounded-xl text-xs font-semibold text-slate-300"
+                    disabled={resendCooldown > 0}
+                    className="py-5 border-white/10 hover:bg-white/5 rounded-xl text-xs font-semibold text-slate-300 disabled:opacity-50"
                   >
-                    Xatni Qayta Yuborish
+                    {resendCooldown > 0 ? `Qayta yuborish (${resendCooldown}s)` : "Xatni Qayta Yuborish"}
                   </Button>
                   <Button 
                     type="button" 
-                    onClick={() => {
-                      // Reload window or try to go to dashboard which forces session check
-                      toast.success("Hisobingiz tekshirilmoqda...");
-                      setTimeout(() => {
-                        window.location.href = '/dashboard';
-                      }, 1000);
-                    }}
-                    className="py-5 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-400 hover:to-purple-500 text-white font-extrabold text-xs shadow-lg shadow-indigo-500/15"
+                    onClick={handleCheckVerification}
+                    className="py-5 rounded-xl bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-500/15"
                   >
-                    Men Tasdiqladim, Kirish
+                    <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                    Tasdiqlandi, Kirish
                   </Button>
                 </div>
 
@@ -329,9 +360,9 @@ export const Auth: React.FC = () => {
                   <button 
                     type="button" 
                     onClick={() => setVerificationSent(false)} 
-                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium hover:underline transition-all"
+                    className="text-[11px] text-slate-400 hover:text-white font-medium hover:underline transition-all cursor-pointer"
                   >
-                    ← Qaytadan kirish maydoniga qaytish
+                    ← Kirish sahifasiga qaytish
                   </button>
                 </div>
 
@@ -351,7 +382,7 @@ export const Auth: React.FC = () => {
                 </CardTitle>
                 <CardDescription className="text-xs text-slate-400">
                   {isSignUp 
-                    ? 'CloudBot platformasining imkoniyatlaridan to\'liq foydalanish uchun ro\'yxatdan o\'ting'
+                    ? 'Botly platformasining imkoniyatlaridan to\'liq foydalanish uchun ro\'yxatdan o\'ting'
                     : 'Boshqaruv paneliga kirish va botlarni boshqarish uchun tizimga kiring'
                   }
                 </CardDescription>
@@ -433,7 +464,19 @@ export const Auth: React.FC = () => {
 
                   {/* Password Input */}
                   <div className="space-y-1.5 text-left">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1">Maxfiy Parol:</label>
+                    <div className="flex items-center justify-between pl-1">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Maxfiy Parol:</label>
+                      {!isSignUp && (
+                        <button
+                          type="button"
+                          onClick={handleForgotPassword}
+                          disabled={loading}
+                          className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold transition-colors cursor-pointer hover:underline"
+                        >
+                          Parolni unutdingizmi?
+                        </button>
+                      )}
+                    </div>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
                         <Lock className="w-4 h-4" />

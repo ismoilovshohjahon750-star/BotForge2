@@ -5,9 +5,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { Plus, Play, Square, RefreshCcw, FileUp, Terminal, Activity, FileText, Trash2, Search, Copy, Check, Radio, Clock, Shield, Cpu, Filter, X, ArrowLeft, Key, Eye, EyeOff, Settings, Sliders, Database, Github, Send, ExternalLink, Sparkles, Wand2 } from 'lucide-react';
+import { Plus, Play, Square, RefreshCcw, FileUp, Terminal, Activity, FileText, Trash2, Search, Copy, Check, Radio, Clock, Shield, Cpu, Filter, X, ArrowLeft, Key, Eye, EyeOff, Settings, Sliders, Database, Github, Send, ExternalLink, Sparkles, Wand2, AlertTriangle, Mail } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, serverTimestamp } from 'firebase/firestore';
-import { GithubAuthProvider, signInWithPopup, linkWithPopup } from 'firebase/auth';
+import { GithubAuthProvider, signInWithPopup, linkWithPopup, sendEmailVerification } from 'firebase/auth';
 import { safeSetDoc, safeUpdateDoc, safeDeleteDoc } from '../lib/safeFirestore';
 import { db, auth, githubProvider } from '../lib/firebase';
 import { Bot, BotStatus, BotLog } from '../types';
@@ -682,6 +682,64 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="container mx-auto px-4 py-12">
+      {/* Unverified Email Warning Banner */}
+      {user && !user.emailVerified && user.providerData?.some(p => p.providerId === 'password') && (
+        <div className="mb-8 p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-amber-300 text-xs shadow-md">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
+              <Mail className="w-4 h-4" />
+            </div>
+            <div>
+              <strong className="text-white block sm:inline font-semibold">Emailingiz ({user.email}) hali tasdiqlanmagan.</strong>{' '}
+              <span className="text-amber-200/90">Botly tizimidagi barcha imkoniyatlar uchun pochtangizga borgan tasdiqlash havolasini bosing.</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={async () => {
+                try {
+                  if (auth.currentUser) {
+                    await sendEmailVerification(auth.currentUser, {
+                      url: window.location.origin + '/dashboard',
+                      handleCodeInApp: false
+                    });
+                    toast.success("Tasdiqlash havolasi qayta emailingizga yuborildi! Pochtani tekshiring.");
+                  }
+                } catch (e: any) {
+                  toast.error("Xat yuborishda xatolik: " + e.message);
+                }
+              }}
+              className="text-xs h-8 rounded-lg border-amber-500/40 text-amber-300 hover:bg-amber-500/20 cursor-pointer"
+            >
+              Havolani qayta yuborish
+            </Button>
+            <Button
+              size="sm"
+              onClick={async () => {
+                try {
+                  if (auth.currentUser) {
+                    await auth.currentUser.reload();
+                    if (auth.currentUser.emailVerified) {
+                      toast.success("Emailingiz muvaffaqiyatli tasdiqlandi!");
+                      window.location.reload();
+                    } else {
+                      toast.warning("Emailingiz hali tasdiqlanmagan. Iltimos pochtangizdagi havolani bosing.");
+                    }
+                  }
+                } catch (err: any) {
+                  toast.error("Tekshirishda xatolik: " + err.message);
+                }
+              }}
+              className="text-xs h-8 rounded-lg bg-amber-500 hover:bg-amber-600 text-black font-bold cursor-pointer"
+            >
+              Tekshirish
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-end mb-8">
         <div>
           <h1 className="text-3xl font-bold">Boshqaruv Paneli</h1>
