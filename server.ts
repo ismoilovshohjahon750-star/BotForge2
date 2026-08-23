@@ -377,6 +377,25 @@ function autoRepairPythonFiles(botDir: string, pyFiles: string[]) {
       }
       if (modified) {
         content = lines.filter((_, idx) => lines[idx] !== '' || idx === lines.length - 1).join('\n');
+      }
+
+      // 3. Inject error handler for python-telegram-bot (ApplicationBuilder / run_polling) if missing
+      if (content.includes('ApplicationBuilder') || content.includes('telegram.ext') || content.includes('run_polling')) {
+        if (!content.includes('add_error_handler') && !content.includes('_cloudbot_error_handler')) {
+          const handlerDef = `\n# CloudBot Auto-injected Global Error Handler\nasync def _cloudbot_error_handler(update, context):\n    import logging\n    if context.error:\n        logging.warning(f"Telegram polling notice: {context.error}")\n`;
+          if (content.includes('def main():') || content.includes('def main(')) {
+            content = content.replace(/(def main\(.*?\):)/, `${handlerDef}\n$1`);
+          } else {
+            content = handlerDef + '\n' + content;
+          }
+          if (content.includes('.run_polling()')) {
+            content = content.replace(/(\w+)\.run_polling\(\)/, `$1.add_error_handler(_cloudbot_error_handler)\n    $1.run_polling()`);
+          }
+          modified = true;
+        }
+      }
+
+      if (modified) {
         fs.writeFileSync(fullPath, content);
       }
 
@@ -428,6 +447,61 @@ function commandExists(command: string) {
     } catch (e) {
         return false;
     }
+}
+
+function validateBotCodeSyntax(botDir: string, activeLanguage: string, activeEntryPoint: string, allDiskFiles: string[]): { valid: boolean; error?: string } {
+  if (activeLanguage === 'python') {
+    const pyBin = getPythonExecutable();
+    const pyFiles = allDiskFiles.filter(f => f.endsWith('.py'));
+    
+    // Sort entry point first
+    const sorted = [...pyFiles].sort((a, b) => (a === activeEntryPoint ? -1 : b === activeEntryPoint ? 1 : 0));
+    
+    for (const relFile of sorted) {
+      const fullPath = path.join(botDir, relFile);
+      if (!fs.existsSync(fullPath)) continue;
+      try {
+        execSync(`${pyBin} -m py_compile "${fullPath}"`, { stdio: 'pipe', encoding: 'utf8' });
+      } catch (compileErr: any) {
+        const stderr = (compileErr?.stderr || compileErr?.stdout || compileErr?.message || '').toString().trim();
+        return {
+          valid: false,
+          error: `Python fayli [${relFile}] da sintaksis xatoligi aniqlandi:\n${stderr || 'SyntaxError: Kodda sintaktik xatolik mavjud'}`
+        };
+      }
+    }
+  } else if (activeLanguage === 'nodejs') {
+    const jsFiles = allDiskFiles.filter(f => f.endsWith('.js') || f.endsWith('.mjs') || f.endsWith('.cjs'));
+    for (const relFile of jsFiles) {
+      const fullPath = path.join(botDir, relFile);
+      if (!fs.existsSync(fullPath)) continue;
+      try {
+        execSync(`node --check "${fullPath}"`, { stdio: 'pipe', encoding: 'utf8' });
+      } catch (checkErr: any) {
+        const stderr = (checkErr?.stderr || checkErr?.stdout || checkErr?.message || '').toString().trim();
+        return {
+          valid: false,
+          error: `JavaScript fayli [${relFile}] da sintaksis xatoligi aniqlandi:\n${stderr || 'SyntaxError: Kodda sintaktik xatolik mavjud'}`
+        };
+      }
+    }
+  } else if (activeLanguage === 'php') {
+    const phpFiles = allDiskFiles.filter(f => f.endsWith('.php'));
+    for (const relFile of phpFiles) {
+      const fullPath = path.join(botDir, relFile);
+      if (!fs.existsSync(fullPath)) continue;
+      try {
+        execSync(`php -l "${fullPath}"`, { stdio: 'pipe', encoding: 'utf8' });
+      } catch (phpErr: any) {
+        const stderr = (phpErr?.stderr || phpErr?.stdout || phpErr?.message || '').toString().trim();
+        return {
+          valid: false,
+          error: `PHP fayli [${relFile}] da sintaksis xatoligi aniqlandi:\n${stderr || 'PHP Parse error'}`
+        };
+      }
+    }
+  }
+  return { valid: true };
 }
 
 async function startBot(botId: string) {
@@ -542,8 +616,15 @@ async function startBot(botId: string) {
                     const now = new Date();
                     const diffMonths = (now.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24 * 30.44);
                     
+                    if (plan === 'free' && diffMonths >= 2) {
+                        addBotLog(botId, 'system', "❌ Bepul tarif bo'yicha bot muddati tugagan (2 oy). Davom etish uchun Pro yoki VIP tarifiga o'ting.");
+                        db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('stopped', botId);
+                        updateFirestoreBotMetadata(botId, { status: 'stopped' });
+                        startingBots.delete(botId);
+                        return;
+                    }
                     if (plan === 'pro' && diffMonths >= 10) {
-                        addBotLog(botId, 'system', "❌ Bot muddati tugagan (10 oy). Davom etish uchun VIP tarifiga o'ting.");
+                        addBotLog(botId, 'system', "❌ Pro tarif bo'yicha bot muddati tugagan (10 oy). Davom etish uchun VIP tarifiga o'ting.");
                         db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('stopped', botId);
                         updateFirestoreBotMetadata(botId, { status: 'stopped' });
                         startingBots.delete(botId);
@@ -916,6 +997,19 @@ async function startBot(botId: string) {
             bot.entryPoint = targetEntryPoint;
         }
 
+        // Pre-Execution Syntax Validation Check (Kodda xatolik bo'lsa deploy to'xtatiladi)
+        const syntaxCheck = validateBotCodeSyntax(botDir, targetLanguage, targetEntryPoint, allDiskFiles);
+        if (!syntaxCheck.valid) {
+            addBotLog(botId, 'deploy', `🚨 KODDA XATOLIK BOR! Deploy to'xtatildi:\n${syntaxCheck.error}`);
+            addBotLog(botId, 'system', `🛑 Kodda xatolik aniqlangani sababli botni ishga tushirish (deploy) to'xtatildi.`);
+            addBotLog(botId, 'system', `💡 Maslahat: Loglar panelidagi 'Xatoliklarni tuzatish' (Error correction) tugmasini bosing. Botly AI kodingizdagi xatoliklarni 30 to'kin evaziga avtomatik tuzatib beradi.`);
+            db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('stopped', botId);
+            updateFirestoreBotMetadata(botId, { status: 'stopped' });
+            userStoppedBots.add(botId);
+            startingBots.delete(botId);
+            return;
+        }
+
         let cmd = 'node';
         let args: string[] = [fullEntryPath];
 
@@ -984,6 +1078,13 @@ async function startBot(botId: string) {
                 // Filter out noisy python framework warnings & pip messages
                 if (line.includes('RuntimeWarning') || line.includes('tracemalloc')) continue;
                 if (line.includes('WARNING: Running pip as the') || line.includes('Requirement already satisfied')) continue;
+                if (line.trim() === 'raise exception' || line.trim() === 'raise exc') continue;
+
+                // Check for Telegram Application error handler warning
+                if (line.includes('No error handlers are registered, logging exception')) {
+                    addBotLog(botId, 'run', `⚠️ Telegram Bot: Tarmoq uzilishi yoki ulanishda xatolik yuz berdi (Auto-reconnecting...).`);
+                    continue;
+                }
 
                 // Check for Telegram Conflict Error
                 if (
@@ -1022,57 +1123,25 @@ async function startBot(botId: string) {
 
             if (userStoppedBots.has(botId)) {
                 addBotLog(botId, 'system', `🛑 Bot foydalanuvchi buyrug'i bilan to'xtatildi.`);
-                db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('stopped', botId);
-                updateFirestoreBotMetadata(botId, { status: 'stopped' });
             } else {
-                // Unexpected exit / crash -> Auto-Restart Supervisor
-                const now = Date.now();
-                const tracker = botCrashTracker.get(botId) || { count: 0, lastCrash: now };
-                if (now - procStartTime > 30000) {
-                    tracker.count = 0;
-                }
-                tracker.count++;
-                tracker.lastCrash = now;
-                botCrashTracker.set(botId, tracker);
-
-                let restartDelay = 5000;
-                if (tracker.count > 5) {
-                    restartDelay = 15000;
-                    addBotLog(botId, 'system', `⚠️ Bot ketma-ket ${tracker.count} marta to'xtadi (kod: ${code}). Auto-restart 15s dan so'ng...`);
+                if (code === 0) {
+                    addBotLog(botId, 'system', `🛑 Bot jarayoni yakunlandi (kod: 0).`);
                 } else {
-                    addBotLog(botId, 'system', `🔄 Bot jarayoni kutilmaganda to'xtadi (kod: ${code}). Avtomatik qayta ishga tushirilmoqda (${Math.round(restartDelay / 1000)}s)...`);
+                    addBotLog(botId, 'system', `⚠️ Bot jarayoni to'xtadi (kod: ${code}). Qayta ishga tushirish uchun "Qayta ishga tushirish" tugmasini bosing yoki xatoliklarni "Error correction" orqali tuzating.`);
                 }
-
-                // Keep status as 'running' so UI stays active!
-                db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('running', botId);
-                updateFirestoreBotMetadata(botId, { status: 'running' });
-
-                setTimeout(() => {
-                    if (!userStoppedBots.has(botId) && !runningBots.has(botId)) {
-                        startBot(botId).catch(e => console.error(`[Auto-restart error - ${botId}]:`, e));
-                    }
-                }, restartDelay);
             }
+
+            db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('stopped', botId);
+            updateFirestoreBotMetadata(botId, { status: 'stopped' });
         });
 
         child.on('error', (err: any) => {
             runningBots.delete(botId);
+            startingBots.delete(botId);
 
-            if (userStoppedBots.has(botId)) {
-                addBotLog(botId, 'system', `❌ Jarayonni boshlashda xatolik (${cmd}): ${err.message}`);
-                db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('stopped', botId);
-                updateFirestoreBotMetadata(botId, { status: 'stopped' });
-            } else {
-                addBotLog(botId, 'system', `⚠️ Jarayonni boshlashda xatolik (${cmd}): ${err.message}. 5s dan so'ng qayta uriniladi...`);
-                db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('running', botId);
-                updateFirestoreBotMetadata(botId, { status: 'running' });
-
-                setTimeout(() => {
-                    if (!userStoppedBots.has(botId) && !runningBots.has(botId)) {
-                        startBot(botId).catch(e => console.error(`[Auto-restart error - ${botId}]:`, e));
-                    }
-                }, 5000);
-            }
+            addBotLog(botId, 'system', `❌ Jarayonni ishga tushirishda xatolik (${cmd}): ${err.message}`);
+            db.prepare('UPDATE bots SET status = ? WHERE id = ?').run('stopped', botId);
+            updateFirestoreBotMetadata(botId, { status: 'stopped' });
         });
     };
 
@@ -2056,6 +2125,255 @@ async function startServer() {
     } catch (error) {
       console.error("Loglarni tozalashda xatonik:", error);
       res.status(500).json({ error: "Loglarni tozalab bo'lmadi" });
+    }
+  });
+
+  // Botly AI: Bot kodi va loglaridagi xatoliklarni avtomatik tuzatish (Har tuzatish uchun 30 to'kin sarflanadi)
+  app.post("/api/bots/:id/fix-errors", requireAuth, async (req: AuthRequest, res) => {
+    const { id } = req.params;
+    const userId = req.user?.uid;
+    if (!userId) {
+      return res.status(401).json({ error: "Foydalanuvchi tizimga kirmagan" });
+    }
+
+    try {
+      // 1. Foydalanuvchi obuna rejasi va kunlik to'kin limitini tekshirish
+      const LIMITS = { free: 45, pro: 145, vip: 500 };
+      let plan: 'free' | 'pro' | 'vip' = 'free';
+      let currentUsage = 0;
+      let usageRef: any = null;
+
+      try {
+        if (adminDb) {
+          const subDoc = await adminDb.collection('subscriptions').doc(userId).get();
+          if (subDoc.exists) {
+            plan = (subDoc.data()?.plan as any) || 'free';
+          }
+          const todayDate = new Date().toISOString().split('T')[0];
+          usageRef = adminDb.collection('usage').doc(userId).collection('daily-usage').doc(todayDate);
+          const usageDoc = await usageRef.get();
+          currentUsage = usageDoc.exists ? (usageDoc.data()?.count || 0) : 0;
+        }
+      } catch (firestoreErr) {
+        console.warn("Firestore usage fetch warning in fix-errors:", firestoreErr);
+      }
+
+      const limit = LIMITS[plan] || LIMITS.free;
+      const COST_TOKENS = 30;
+
+      if (currentUsage + COST_TOKENS > limit) {
+        const remaining = Math.max(0, limit - currentUsage);
+        return res.status(403).json({
+          error: `Xatolikni tuzatish uchun 30 ta Botly AI to'kini talab qilinadi. Sizning joriy tarifingiz (${plan.toUpperCase()}) bo'yicha bugungi limitingizda ${remaining}/${limit} to'kin qolgan. Iltimos, tarifingizni yangilang.`
+        });
+      }
+
+      // 2. Bot papkasidagi mavjud fayllarni to'plash
+      const botDir = path.join(process.cwd(), 'bots_running', id);
+      const botFiles: { filename: string; content: string }[] = [];
+
+      // Agar papka mavjud bo'lmasa, SQLite BLOB dan tiklash
+      if (!fs.existsSync(botDir) || fs.readdirSync(botDir).length === 0) {
+        const sqliteBot = db.prepare('SELECT code FROM bots WHERE id = ?').get(id) as any;
+        if (sqliteBot && sqliteBot.code) {
+          fs.mkdirSync(botDir, { recursive: true });
+          const zip = new AdmZip(sqliteBot.code);
+          zip.extractAllTo(botDir, true);
+        }
+      }
+
+      const getAllCodeFiles = (dir: string, baseDir = dir) => {
+        if (!fs.existsSync(dir)) return;
+        const items = fs.readdirSync(dir);
+        for (const item of items) {
+          if (['node_modules', '__pycache__', '.git', '.venv', 'venv', '.pid', 'bot.zip', 'bot_bin'].includes(item)) continue;
+          if (item.endsWith('.db') || item.endsWith('.sqlite') || item.endsWith('.sqlite3') || item.endsWith('.log')) continue;
+          const full = path.join(dir, item);
+          const rel = path.relative(baseDir, full);
+          const stat = fs.statSync(full);
+          if (stat.isDirectory()) {
+            getAllCodeFiles(full, baseDir);
+          } else {
+            const ext = path.extname(item).toLowerCase();
+            if (['.py', '.js', '.ts', '.json', '.env', '.txt', '.php', '.go', '.rs', '.rb', '.yml', '.yaml', '.sh'].includes(ext) || item === 'Dockerfile' || item === 'Procfile') {
+              try {
+                const content = fs.readFileSync(full, 'utf8');
+                botFiles.push({ filename: rel, content });
+              } catch (e) {}
+            }
+          }
+        }
+      };
+
+      if (fs.existsSync(botDir)) {
+        getAllCodeFiles(botDir);
+      }
+
+      if (botFiles.length === 0) {
+        return res.status(400).json({ error: "Bot kodi fayllari serverda topilmadi. Iltimos, zip faylini qayta yuklang." });
+      }
+
+      // 3. Botning so'nggi loglari va xatoliklarini olish
+      const logs = db.prepare('SELECT type, message, created_at FROM bot_logs WHERE bot_id = ? ORDER BY id DESC LIMIT 25').all(id) as any[];
+      const logContext = logs.reverse().map(l => `[${l.type.toUpperCase()}] ${l.message}`).join('\n');
+
+      addBotLog(id, 'system', `🤖 [Botly AI]: Xatoliklarni avtomatik tuzatish boshlandi (30 to'kin sarflanmoqda)...`);
+
+      // 4. AI orqali xatoliklarni tuzatish
+      const filesContextStr = botFiles.map(f => `--- FAYL: ${f.filename} ---\n${f.content}\n--- FAYL TUGADI ---`).join('\n\n');
+
+      const systemInstruction = `Siz faqat va faqat dasturiy ta'minot va Telegram botlardagi sintaktik, mantiqiy, kutubxona (dependencies) va asinxron xatoliklarni chuqur tahlil qilib to'g'irlaydigan eng yuqori darajadagi AI Debugger va Bug Fixer mutaxassisisiz (Botly AI Auto-debugger).
+
+Vazifangiz:
+1. Taqdim etilgan so'nggi loglar va bot kodidagi barcha xatoliklarni (SyntaxError, IndentationError, NameError, ImportError, TypeError, Telegram API xatoliklari, token/konfiguratsiya xatoliklari, unclosed quotes, async/await xatolari va h.k.) aniqlang.
+2. Xatolik mavjud bo'lgan fayllarni 100% to'g'ri, to'liq, mukammal va ishlab chiqarishga tayyor holatda tuzatib qaytaring.
+3. Hech qachon chala kod, "..." yoki placeholder yozmang! Faylning to'liq ishchi kodini taqdim eting.
+4. Agar yangi kutubxona kerak bo'lsa requirements.txt yoki package.json ga ham qo'shing.
+5. Python-Telegram-Bot, Aiogram, Pyrogram, Telegraf yoki GrammY botlarida xatoliklarni ushlovchi global error handlerlarni xavfsiz integratsiya qiling.
+
+Javobni FAQAT ushbu formatdagi JSON ko'rinishida bering:
+{
+  "explanation": "Qanday xatoliklar aniqlandi va qanday qilib to'liq tuzatildi (o'zbek tilida aniq va tushunarli)",
+  "fixedFiles": [
+    {
+      "filename": "fayl_nomi (masalan: main.py)",
+      "content": "faylning to'liq tuzatilgan kodi"
+    }
+  ]
+}`;
+
+      const userPrompt = `BOTNING SO'NGGI LOGLARI VA XATOLIKLARI:\n${logContext || "Loglarda xatolik aniqlanmagan, lekin kod sintaksisini va barcha fayllarni tekshirib xatoliklarni to'g'irlang."}\n\nBOTNING MAVJUD FAYLLARI:\n${filesContextStr}`;
+
+      let explanation = "";
+      let fixedFiles: { filename: string; content: string }[] = [];
+
+      // 1. Try Groq LLaMA first
+      const groq = getGroqClient();
+      if (groq) {
+        try {
+          const completion = await groq.chat.completions.create({
+            messages: [
+              { role: "system", content: systemInstruction },
+              { role: "user", content: userPrompt }
+            ],
+            model: "llama-3.3-70b-versatile",
+            response_format: { type: "json_object" },
+            temperature: 0.1
+          });
+          const raw = completion.choices[0]?.message?.content;
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed.explanation && Array.isArray(parsed.fixedFiles) && parsed.fixedFiles.length > 0) {
+              explanation = parsed.explanation;
+              fixedFiles = parsed.fixedFiles;
+              console.log(`[Botly AI Fix]: Groq LLaMA successfully fixed ${fixedFiles.length} files.`);
+            }
+          }
+        } catch (groqErr) {
+          console.warn("[Botly AI Fix]: Groq failed, switching to Gemini:", groqErr);
+        }
+      }
+
+      // 2. Gemini fallback / primary
+      if (fixedFiles.length === 0) {
+        const client = getGeminiClient();
+        const geminiRes = await client.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: userPrompt,
+          config: {
+            systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                explanation: { type: Type.STRING, description: "Tuzatilgan xatoliklar haqida izoh" },
+                fixedFiles: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      filename: { type: Type.STRING },
+                      content: { type: Type.STRING }
+                    },
+                    required: ["filename", "content"]
+                  }
+                }
+              },
+              required: ["explanation", "fixedFiles"]
+            }
+          }
+        });
+
+        const raw = geminiRes.text;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          explanation = parsed.explanation || "Xatoliklar muvaffaqiyatli tuzatildi";
+          fixedFiles = parsed.fixedFiles || [];
+        }
+      }
+
+      if (fixedFiles.length === 0) {
+        return res.status(500).json({ error: "AI kodni tuzatishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring." });
+      }
+
+      // 5. Tuzatilgan fayllarni diskka yozish
+      for (const f of fixedFiles) {
+        const targetPath = path.join(botDir, f.filename);
+        const targetParent = path.dirname(targetPath);
+        if (!fs.existsSync(targetParent)) {
+          fs.mkdirSync(targetParent, { recursive: true });
+        }
+        fs.writeFileSync(targetPath, f.content, 'utf8');
+      }
+
+      // 6. Zip ni qayta yaratish va SQLite hamda Firestore ni yangilash
+      const updatedZip = new AdmZip();
+      updatedZip.addLocalFolder(botDir);
+      const zipBuffer = updatedZip.toBuffer();
+
+      db.prepare('UPDATE bots SET code = ? WHERE id = ?').run(zipBuffer, id);
+      try {
+        if (adminDb && zipBuffer.length <= 900000) {
+          await adminDb.collection('bots').doc(id).set({
+            codeZipBase64: zipBuffer.toString('base64'),
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        }
+      } catch (fsErr) {}
+
+      // 7. Tokenni ayirish (30 to'kin)
+      if (usageRef) {
+        try {
+          await adminDb.runTransaction(async (t) => {
+            const docSnap: any = await t.get(usageRef);
+            const count = (docSnap && docSnap.exists) ? (docSnap.data()?.count || 0) : 0;
+            t.set(usageRef, { count: count + COST_TOKENS }, { merge: true });
+          });
+        } catch (tErr) {
+          console.warn("Token deduction transaction warning:", tErr);
+        }
+      }
+
+      const remainingTokens = Math.max(0, limit - (currentUsage + COST_TOKENS));
+
+      // 8. Tizim loglariga hisobot qo'shish
+      addBotLog(id, 'system', `✨ [Botly AI]: Xatoliklar muvaffaqiyatli tuzatildi! (-30 token sarflandi, qoldi: ${remainingTokens}/${limit} token).`);
+      addBotLog(id, 'system', `📝 Tuzatish tafsilotlari: ${explanation}`);
+      addBotLog(id, 'system', `📂 Yangilangan fayllar: ${fixedFiles.map(f => f.filename).join(', ')}`);
+      addBotLog(id, 'system', `🚀 Botni ishga tushirish uchun "Restart" tugmasini bosing.`);
+
+      res.json({
+        success: true,
+        message: `Botly AI xatoliklarni muvaffaqiyatli tuzatdi! (30 token sarflandi)`,
+        explanation,
+        fixedFiles: fixedFiles.map(f => f.filename),
+        tokensUsed: COST_TOKENS,
+        remainingTokens,
+        limit
+      });
+    } catch (err: any) {
+      console.error("Botly AI Fix Errors API failure:", err);
+      res.status(500).json({ error: "Xatoliklarni tuzatishda xatolik yuz berdi: " + (err.message || err) });
     }
   });
 

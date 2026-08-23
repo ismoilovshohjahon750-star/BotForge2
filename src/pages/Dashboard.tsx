@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Badge } from '../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { Plus, Play, Square, RefreshCcw, FileUp, Terminal, Activity, FileText, Trash2, Search, Copy, Check, Radio, Clock, Shield, Cpu, Filter, X, ArrowLeft, Key, Eye, EyeOff, Settings, Sliders, Database, Github, Send, ExternalLink } from 'lucide-react';
+import { Plus, Play, Square, RefreshCcw, FileUp, Terminal, Activity, FileText, Trash2, Search, Copy, Check, Radio, Clock, Shield, Cpu, Filter, X, ArrowLeft, Key, Eye, EyeOff, Settings, Sliders, Database, Github, Send, ExternalLink, Sparkles, Wand2 } from 'lucide-react';
 import { collection, query, where, onSnapshot, addDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { GithubAuthProvider, signInWithPopup, linkWithPopup } from 'firebase/auth';
 import { safeSetDoc, safeUpdateDoc, safeDeleteDoc } from '../lib/safeFirestore';
@@ -262,6 +262,42 @@ export const Dashboard: React.FC = () => {
       }
     } catch (e: any) {
       toast.error(e.message);
+    }
+  };
+
+  const [isFixingErrors, setIsFixingErrors] = useState(false);
+
+  const handleFixBotErrors = async (bot: Bot) => {
+    if (!user) {
+      toast.error("Iltimos, tizimga kiring!");
+      return;
+    }
+    setIsFixingErrors(true);
+    toast.loading("Botly AI koddagi barcha xatoliklarni tekshirmoqda va tuzatmoqda...", { id: 'ai-fix-toast' });
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(`/api/bots/${bot.id}/fix-errors`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Xatolikni tuzatishda muammo yuz berdi", { id: 'ai-fix-toast', duration: 6000 });
+        return;
+      }
+      toast.success(`✨ ${data.message || "Xatoliklar muvaffaqiyatli tuzatildi!"}`, { id: 'ai-fix-toast', duration: 6000 });
+      if (data.explanation) {
+        toast.info(`Tafsilot: ${data.explanation.slice(0, 150)}...`, { duration: 8000 });
+      }
+      // Refresh logs
+      await fetchLogs(bot.id);
+    } catch (err: any) {
+      toast.error(err?.message || "Server bilan bog'lanishda xatolik", { id: 'ai-fix-toast' });
+    } finally {
+      setIsFixingErrors(false);
     }
   };
 
@@ -1241,6 +1277,20 @@ export const Dashboard: React.FC = () => {
             >
               <span className={`w-1.5 h-1.5 rounded-full ${autoScroll ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}`} />
               <span>Avto-skroll: {autoScroll ? 'Yoqilgan' : 'O\'chirilgan'}</span>
+            </Button>
+
+            <Button
+              size="sm"
+              disabled={isFixingErrors}
+              onClick={() => handleFixBotErrors(currentBot)}
+              className="h-8 px-3 text-[11px] gap-1.5 rounded-xl border border-purple-800/60 bg-purple-950/40 text-purple-300 hover:bg-purple-900/60 hover:text-purple-100 transition-all font-medium shrink-0 shadow-sm"
+              title="Bot kodi va loglaridagi xatoliklarni Botly AI orqali avtomatik tuzatish (30 token sarflanadi)"
+            >
+              <Sparkles className={`w-3.5 h-3.5 text-purple-400 ${isFixingErrors ? 'animate-spin' : ''}`} />
+              <span>{isFixingErrors ? "AI tuzatmoqda..." : "Error correction (Xatoliklarni tuzatish)"}</span>
+              <span className="text-[9px] px-1.5 py-0.5 bg-purple-900/80 text-purple-200 rounded font-mono border border-purple-700/50">
+                30 token
+              </span>
             </Button>
           </div>
 

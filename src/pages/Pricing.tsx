@@ -62,8 +62,7 @@ export const Pricing: React.FC = () => {
         "Botlar 2 oy ishlab beradi",
         "Botly AI limiti: 45 tokin/kuniga",
         "Uptime: 24/7 server uzluksizligi",
-        "Standart qo'llab-quvvatlash",
-        "Avtomatik qayta ishga tushirish (Auto-restart)"
+        "Standart qo'llab-quvvatlash"
       ],
       button: "Hozir boshlang",
       popular: false
@@ -99,7 +98,7 @@ export const Pricing: React.FC = () => {
         "Cheksiz terminal loglari tarixi",
         "24/7 Shaxsiy Telegram yordamchi",
         "Maksimal server resurslari va tezkor tarmoq",
-        "Avtomatik xatoliklarni tuzatuvchi sun'iy intellekt"
+        "Avtomatik xatoliklarni tuzatuvchi sun'iy intellekt (Error correction)"
       ],
       button: "Obuna bo'lish",
       popular: false

@@ -3,17 +3,15 @@ import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { Button } from './ui/button';
-import { Bot, LogOut, LayoutDashboard, ShieldCheck, Menu, X, Coins, LogIn, MessageSquare, Send, ExternalLink, Smartphone, QrCode } from 'lucide-react';
+import { Bot, LogOut, LayoutDashboard, ShieldCheck, Menu, X, Coins, LogIn, MessageSquare, Send, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { LogoFull } from './Logo';
 import { NotificationBell } from './NotificationBell';
-import { UniqueIdModal } from './UniqueIdModal';
 
 export const Navbar: React.FC = () => {
   const { user, isAdmin, logout, login } = useAuth();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
-  const [isUniqueIdOpen, setIsUniqueIdOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -27,11 +25,6 @@ export const Navbar: React.FC = () => {
     closeMenu();
     await logout();
     navigate('/');
-  };
-
-  const handleOpenUniqueId = () => {
-    closeMenu();
-    setIsUniqueIdOpen(true);
   };
 
   const handleLogin = async () => {
@@ -139,14 +132,6 @@ export const Navbar: React.FC = () => {
                       <span>Botly AI</span>
                     </Link>
 
-                    <button
-                      onClick={handleOpenUniqueId}
-                      className="flex items-center gap-3 py-3 px-4 rounded-xl bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 transition-all text-sm font-semibold cursor-pointer my-1 group"
-                    >
-                      <Smartphone className="w-4 h-4 text-primary group-hover:scale-110 transition-transform" />
-                      <span>Unikal ID</span>
-                    </button>
-
                     {user ? (
                       <>
                         <Link
@@ -196,12 +181,6 @@ export const Navbar: React.FC = () => {
         </AnimatePresence>,
         document.body
       )}
-
-      {/* Unique ID Sync Modal */}
-      <UniqueIdModal
-        isOpen={isUniqueIdOpen}
-        onClose={() => setIsUniqueIdOpen(false)}
-      />
     </nav>
   );
 };
