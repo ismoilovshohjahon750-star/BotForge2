@@ -65,9 +65,209 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const gainNodeRef = useRef<GainNode | null>(null);
   const ringIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Media stream refs
+  // Media & WebRTC refs
   const streamRef = useRef<MediaStream | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const unsubsRef = useRef<(() => void)[]>([]);
+
+  // WebRTC STUN Servers
+  const RTC_SERVERS = {
+    iceServers: [
+      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
+    ]
+  };
+
+  // Cleanup WebRTC & Streams
+  const cleanupWebRTC = () => {
+    unsubsRef.current.forEach(unsub => {
+      try { unsub(); } catch (e) {}
+    });
+    unsubsRef.current = [];
+
+    if (peerConnectionRef.current) {
+      try {
+        peerConnectionRef.current.ontrack = null;
+        peerConnectionRef.current.onicecandidate = null;
+        peerConnectionRef.current.close();
+      } catch (e) {}
+      peerConnectionRef.current = null;
+    }
+
+    if (localStreamRef.current) {
+      try {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+      } catch (e) {}
+      localStreamRef.current = null;
+    }
+
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = null;
+    }
+  };
+
+  // Start Visualizer for local mic
+  const startVisualizer = (stream: MediaStream) => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 64;
+      const source = ctx.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const updateLevel = () => {
+        if (!localStreamRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        setAudioLevel(Math.max(12, Math.min(100, avg * 1.8)));
+        animationFrameRef.current = requestAnimationFrame(updateLevel);
+      };
+      updateLevel();
+    } catch (e) {
+      console.warn("Visualizer init notice:", e);
+    }
+  };
+
+  // Initialize Caller WebRTC
+  const initCallerWebRTC = async (callId: string) => {
+    cleanupWebRTC();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStreamRef.current = stream;
+      streamRef.current = stream;
+      startVisualizer(stream);
+
+      const pc = new RTCPeerConnection(RTC_SERVERS);
+      peerConnectionRef.current = pc;
+
+      // Add local audio track
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      // Receive remote audio track
+      pc.ontrack = (event) => {
+        if (remoteAudioRef.current && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
+        }
+      };
+
+      // ICE candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          safeAddDoc(collection(db, 'active_calls', callId, 'callerCandidates'), event.candidate.toJSON());
+        }
+      };
+
+      // SDP Offer
+      const offerDescription = await pc.createOffer();
+      await pc.setLocalDescription(offerDescription);
+
+      const offer = {
+        sdp: offerDescription.sdp,
+        type: offerDescription.type
+      };
+
+      await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'offer'), offer);
+
+      // Listen for Answer
+      const unsubAnswer = onSnapshot(doc(db, 'active_calls', callId, 'webrtc', 'answer'), (snapshot) => {
+        if (snapshot.exists() && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
+          const data = snapshot.data();
+          const answerDescription = new RTCSessionDescription({ sdp: data.sdp, type: data.type });
+          peerConnectionRef.current.setRemoteDescription(answerDescription).catch(e => console.warn("Set remote desc error:", e));
+        }
+      });
+      unsubsRef.current.push(unsubAnswer);
+
+      // Listen for Receiver ICE Candidates
+      const unsubRecCand = onSnapshot(collection(db, 'active_calls', callId, 'receiverCandidates'), (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added' && peerConnectionRef.current) {
+            const candidate = new RTCIceCandidate(change.doc.data());
+            peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
+          }
+        });
+      });
+      unsubsRef.current.push(unsubRecCand);
+
+    } catch (err) {
+      console.error("Caller WebRTC init error:", err);
+      toast.error("Mikrofonni ulashda xatolik yuz berdi");
+    }
+  };
+
+  // Initialize Receiver WebRTC
+  const initReceiverWebRTC = async (callId: string) => {
+    cleanupWebRTC();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStreamRef.current = stream;
+      streamRef.current = stream;
+      startVisualizer(stream);
+
+      const pc = new RTCPeerConnection(RTC_SERVERS);
+      peerConnectionRef.current = pc;
+
+      // Add local audio track
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      // Receive remote audio track
+      pc.ontrack = (event) => {
+        if (remoteAudioRef.current && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
+        }
+      };
+
+      // ICE candidates
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          safeAddDoc(collection(db, 'active_calls', callId, 'receiverCandidates'), event.candidate.toJSON());
+        }
+      };
+
+      // Listen for Caller Candidates
+      const unsubCallerCand = onSnapshot(collection(db, 'active_calls', callId, 'callerCandidates'), (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added' && peerConnectionRef.current) {
+            const candidate = new RTCIceCandidate(change.doc.data());
+            peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
+          }
+        });
+      });
+      unsubsRef.current.push(unsubCallerCand);
+
+      // Fetch SDP Offer from Caller and Create Answer
+      const offerSnap = await getDoc(doc(db, 'active_calls', callId, 'webrtc', 'offer'));
+      if (offerSnap.exists()) {
+        const offerData = offerSnap.data();
+        await pc.setRemoteDescription(new RTCSessionDescription({ sdp: offerData.sdp, type: offerData.type }));
+
+        const answerDescription = await pc.createAnswer();
+        await pc.setLocalDescription(answerDescription);
+
+        const answer = {
+          sdp: answerDescription.sdp,
+          type: answerDescription.type
+        };
+
+        await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'answer'), answer);
+      }
+
+    } catch (err) {
+      console.error("Receiver WebRTC init error:", err);
+      toast.error("Mikrofonni ulashda xatolik yuz berdi");
+    }
+  };
 
   // Stop any active tones
   const stopAllTones = () => {
@@ -473,6 +673,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCallRole('caller');
       setDuration(0);
       setIsMinimized(false);
+      
+      // Initialize WebRTC for caller
+      await initCallerWebRTC(callDocId);
+
       toast.success(`${receiverName} bilan ovozli qo'ng'iroq boshlandi...`);
     } catch (e: any) {
       console.error("Call start error:", e);
@@ -491,6 +695,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         answeredAt: new Date().toISOString()
       });
       setCurrentCall(prev => prev ? { ...prev, status: 'connected' } : null);
+
+      // Initialize WebRTC for receiver
+      await initReceiverWebRTC(currentCall.id);
+
       toast.success("Ovozli qo'ng'iroqqa ulandingiz");
     } catch (e) {
       console.error("Accept call error:", e);
@@ -502,6 +710,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentCall) return;
     try {
       stopAllTones();
+      cleanupWebRTC();
       const callRef = doc(db, 'active_calls', currentCall.id);
       await safeUpdateDoc(callRef, {
         status: 'rejected',
@@ -521,6 +730,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentCall) return;
     stopAllTones();
     stopMicCapture();
+    cleanupWebRTC();
 
     const wasConnected = currentCall.status === 'connected';
     const finalSecs = duration;
@@ -556,13 +766,21 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const toggleMute = () => {
-    if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = isMuted;
+    const nextMute = !isMuted;
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = !nextMute;
       });
     }
-    setIsMuted(prev => !prev);
+    setIsMuted(nextMute);
   };
+
+  // Synchronize speaker mode with remote audio element
+  useEffect(() => {
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = !isSpeakerOn;
+    }
+  }, [isSpeakerOn]);
 
   const formatTime = (secs: number) => {
     const mins = Math.floor(secs / 60);
@@ -586,6 +804,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       callRole,
       isCallModalOpen: !!currentCall
     }}>
+      {/* Hidden audio element to play remote peer voice stream */}
+      <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+
       {children}
 
       {/* ================= INCOMING CALL PROMINENT POPUP ================= */}
