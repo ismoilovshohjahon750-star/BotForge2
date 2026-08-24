@@ -9,7 +9,7 @@ import { safeSetDoc, safeUpdateDoc, safeAddDoc } from '../lib/safeFirestore';
 import { toast } from 'sonner';
 import { 
   Phone, PhoneOff, PhoneCall, PhoneIncoming, Mic, MicOff, 
-  Volume2, VolumeX, Minimize2, Maximize2, Sparkles, ShieldAlert, X 
+  Volume2, VolumeX, Minimize2, Maximize2, Sparkles, ShieldAlert, X, Radio
 } from 'lucide-react';
 
 export interface ActiveCallData {
@@ -58,26 +58,34 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isSpeakerOn, setIsSpeakerOn] = useState<boolean>(true);
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
   const [audioLevel, setAudioLevel] = useState<number>(15);
+  const [remoteAudioLevel, setRemoteAudioLevel] = useState<number>(15);
+  const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
 
   // Audio tone refs
   const audioContextRef = useRef<AudioContext | null>(null);
   const oscillatorRefs = useRef<OscillatorNode[]>([]);
-  const gainNodeRef = useRef<GainNode | null>(null);
   const ringIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Media & WebRTC refs
-  const streamRef = useRef<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const unsubsRef = useRef<(() => void)[]>([]);
 
-  // WebRTC STUN Servers
-  const RTC_SERVERS = {
+  // WebRTC STUN/TURN Servers for global peer-to-peer NAT traversal
+  const RTC_SERVERS: RTCConfiguration = {
     iceServers: [
-      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
-    ]
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+      { urls: 'stun:stun.services.mozilla.com' },
+      { urls: 'stun:stun.counterpath.net:3478' }
+    ],
+    iceCandidatePoolSize: 10
   };
 
   // Cleanup WebRTC & Streams
@@ -87,10 +95,16 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
     unsubsRef.current = [];
 
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
     if (peerConnectionRef.current) {
       try {
         peerConnectionRef.current.ontrack = null;
         peerConnectionRef.current.onicecandidate = null;
+        peerConnectionRef.current.onconnectionstatechange = null;
         peerConnectionRef.current.close();
       } catch (e) {}
       peerConnectionRef.current = null;
@@ -108,10 +122,11 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Start Visualizer for local mic
+  // Start Visualizer for active audio stream
   const startVisualizer = (stream: MediaStream) => {
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
       const ctx = new AudioCtx();
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 64;
@@ -128,7 +143,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
           sum += dataArray[i];
         }
         const avg = sum / dataArray.length;
-        setAudioLevel(Math.max(12, Math.min(100, avg * 1.8)));
+        setAudioLevel(Math.max(12, Math.min(100, avg * 2.2)));
         animationFrameRef.current = requestAnimationFrame(updateLevel);
       };
       updateLevel();
@@ -137,38 +152,80 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Helper to attach remote audio stream and trigger autoplay
+  const setupRemoteAudio = (stream: MediaStream) => {
+    if (!remoteAudioRef.current) return;
+    try {
+      remoteAudioRef.current.srcObject = stream;
+      remoteAudioRef.current.muted = !isSpeakerOn;
+      remoteAudioRef.current.volume = 1.0;
+      const playPromise = remoteAudioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(err => {
+          console.warn("Remote audio play awaiting user gesture:", err);
+        });
+      }
+    } catch (err) {
+      console.warn("Remote audio stream attach error:", err);
+    }
+  };
+
   // Initialize Caller WebRTC
   const initCallerWebRTC = async (callId: string) => {
     cleanupWebRTC();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      // 1. Get high quality microphone audio stream with noise suppression & echo cancellation
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false
+      });
       localStreamRef.current = stream;
-      streamRef.current = stream;
+      stream.getAudioTracks().forEach(track => {
+        track.enabled = true;
+      });
       startVisualizer(stream);
 
+      // 2. Create RTCPeerConnection
       const pc = new RTCPeerConnection(RTC_SERVERS);
       peerConnectionRef.current = pc;
 
-      // Add local audio track
+      let isRemoteDescSet = false;
+      const candidatesQueue: RTCIceCandidateInit[] = [];
+
+      // Add local audio tracks to peer connection
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Receive remote audio track
+      // 3. Receive remote audio stream from recipient
       pc.ontrack = (event) => {
-        if (remoteAudioRef.current && event.streams[0]) {
-          remoteAudioRef.current.srcObject = event.streams[0];
-          remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
+        console.log("Caller received remote track:", event);
+        const remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+        setupRemoteAudio(remoteStream);
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log("Caller connection state:", pc.connectionState);
+        setConnectionStatus(pc.connectionState);
+        if (pc.connectionState === 'connected' && remoteAudioRef.current) {
+          remoteAudioRef.current.play().catch(() => {});
         }
       };
 
-      // ICE candidates
+      // 4. Send local ICE candidates to Firestore
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           safeAddDoc(collection(db, 'active_calls', callId, 'callerCandidates'), event.candidate.toJSON());
         }
       };
 
-      // SDP Offer
-      const offerDescription = await pc.createOffer();
+      // 5. Create Offer and store in Firestore
+      const offerDescription = await pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: false
+      });
       await pc.setLocalDescription(offerDescription);
 
       const offer = {
@@ -178,22 +235,41 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'offer'), offer);
 
-      // Listen for Answer
-      const unsubAnswer = onSnapshot(doc(db, 'active_calls', callId, 'webrtc', 'answer'), (snapshot) => {
+      // 6. Listen for Receiver's Answer
+      const unsubAnswer = onSnapshot(doc(db, 'active_calls', callId, 'webrtc', 'answer'), async (snapshot) => {
         if (snapshot.exists() && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
           const data = snapshot.data();
-          const answerDescription = new RTCSessionDescription({ sdp: data.sdp, type: data.type });
-          peerConnectionRef.current.setRemoteDescription(answerDescription).catch(e => console.warn("Set remote desc error:", e));
+          if (data && data.sdp && data.type) {
+            try {
+              const answerDescription = new RTCSessionDescription({ sdp: data.sdp, type: data.type });
+              await peerConnectionRef.current.setRemoteDescription(answerDescription);
+              isRemoteDescSet = true;
+
+              // Process any queued candidates that arrived before the answer
+              while (candidatesQueue.length > 0) {
+                const cand = candidatesQueue.shift();
+                if (cand && peerConnectionRef.current) {
+                  await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(e => console.warn("Drain ICE cand error:", e));
+                }
+              }
+            } catch (e) {
+              console.warn("Set remote desc error:", e);
+            }
+          }
         }
       });
       unsubsRef.current.push(unsubAnswer);
 
-      // Listen for Receiver ICE Candidates
+      // 7. Listen for Receiver ICE Candidates with safe queueing
       const unsubRecCand = onSnapshot(collection(db, 'active_calls', callId, 'receiverCandidates'), (snapshot) => {
         snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added' && peerConnectionRef.current) {
-            const candidate = new RTCIceCandidate(change.doc.data());
-            peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
+          if (change.type === 'added') {
+            const candData = change.doc.data() as RTCIceCandidateInit;
+            if (peerConnectionRef.current && isRemoteDescSet && peerConnectionRef.current.remoteDescription) {
+              peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candData)).catch(() => {});
+            } else {
+              candidatesQueue.push(candData);
+            }
           }
         });
       });
@@ -201,7 +277,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     } catch (err) {
       console.error("Caller WebRTC init error:", err);
-      toast.error("Mikrofonni ulashda xatolik yuz berdi");
+      toast.error("Mikrofonni ulashda xatolik yuz berdi. Brauzerda mikrofonga ruxsat bering.");
     }
   };
 
@@ -209,67 +285,123 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const initReceiverWebRTC = async (callId: string) => {
     cleanupWebRTC();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      // 1. Get high quality microphone audio stream
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false
+      });
       localStreamRef.current = stream;
-      streamRef.current = stream;
+      stream.getAudioTracks().forEach(track => {
+        track.enabled = true;
+      });
       startVisualizer(stream);
 
+      // 2. Create RTCPeerConnection
       const pc = new RTCPeerConnection(RTC_SERVERS);
       peerConnectionRef.current = pc;
+
+      let isRemoteDescSet = false;
+      const candidatesQueue: RTCIceCandidateInit[] = [];
 
       // Add local audio track
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Receive remote audio track
+      // 3. Receive remote audio stream from caller
       pc.ontrack = (event) => {
-        if (remoteAudioRef.current && event.streams[0]) {
-          remoteAudioRef.current.srcObject = event.streams[0];
-          remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
+        console.log("Receiver received remote track:", event);
+        const remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+        setupRemoteAudio(remoteStream);
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log("Receiver connection state:", pc.connectionState);
+        setConnectionStatus(pc.connectionState);
+        if (pc.connectionState === 'connected' && remoteAudioRef.current) {
+          remoteAudioRef.current.play().catch(() => {});
         }
       };
 
-      // ICE candidates
+      // 4. Send receiver ICE candidates to Firestore
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           safeAddDoc(collection(db, 'active_calls', callId, 'receiverCandidates'), event.candidate.toJSON());
         }
       };
 
-      // Listen for Caller Candidates
+      // 5. Listen for Caller Candidates with queueing until remote description is set
       const unsubCallerCand = onSnapshot(collection(db, 'active_calls', callId, 'callerCandidates'), (snapshot) => {
         snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added' && peerConnectionRef.current) {
-            const candidate = new RTCIceCandidate(change.doc.data());
-            peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
+          if (change.type === 'added') {
+            const candData = change.doc.data() as RTCIceCandidateInit;
+            if (peerConnectionRef.current && isRemoteDescSet && peerConnectionRef.current.remoteDescription) {
+              peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candData)).catch(() => {});
+            } else {
+              candidatesQueue.push(candData);
+            }
           }
         });
       });
       unsubsRef.current.push(unsubCallerCand);
 
-      // Fetch SDP Offer from Caller and Create Answer
-      const offerSnap = await getDoc(doc(db, 'active_calls', callId, 'webrtc', 'offer'));
+      // 6. Fetch SDP Offer from Caller and Create Answer
+      const processOffer = async (offerData: any) => {
+        if (!offerData || !offerData.sdp || !offerData.type) return;
+        if (pc.currentRemoteDescription) return;
+
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription({ sdp: offerData.sdp, type: offerData.type }));
+          isRemoteDescSet = true;
+
+          // Drain queued candidates
+          while (candidatesQueue.length > 0) {
+            const cand = candidatesQueue.shift();
+            if (cand && peerConnectionRef.current) {
+              await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+            }
+          }
+
+          const answerDescription = await pc.createAnswer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: false
+          });
+          await pc.setLocalDescription(answerDescription);
+
+          const answer = {
+            sdp: answerDescription.sdp,
+            type: answerDescription.type
+          };
+
+          await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'answer'), answer);
+        } catch (e) {
+          console.warn("Receiver process offer error:", e);
+        }
+      };
+
+      // Read offer directly or listen via snapshot
+      const offerDocRef = doc(db, 'active_calls', callId, 'webrtc', 'offer');
+      const offerSnap = await getDoc(offerDocRef);
       if (offerSnap.exists()) {
-        const offerData = offerSnap.data();
-        await pc.setRemoteDescription(new RTCSessionDescription({ sdp: offerData.sdp, type: offerData.type }));
-
-        const answerDescription = await pc.createAnswer();
-        await pc.setLocalDescription(answerDescription);
-
-        const answer = {
-          sdp: answerDescription.sdp,
-          type: answerDescription.type
-        };
-
-        await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'answer'), answer);
+        await processOffer(offerSnap.data());
+      } else {
+        const unsubOffer = onSnapshot(offerDocRef, (snap) => {
+          if (snap.exists()) {
+            processOffer(snap.data());
+          }
+        });
+        unsubsRef.current.push(unsubOffer);
       }
 
     } catch (err) {
       console.error("Receiver WebRTC init error:", err);
-      toast.error("Mikrofonni ulashda xatolik yuz berdi");
+      toast.error("Mikrofonni ulashda xatolik yuz berdi. Brauzerda mikrofonga ruxsat bering.");
     }
   };
 
-  // Stop any active tones
+  // Stop any active audio tones
   const stopAllTones = () => {
     if (ringIntervalRef.current) {
       clearInterval(ringIntervalRef.current);
@@ -322,7 +454,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       gain.connect(ctx.destination);
       osc.start();
       oscillatorRefs.current.push(osc);
-      gainNodeRef.current = gain;
     } catch (e) {
       console.warn("Could not play outgoing tone:", e);
     }
@@ -340,7 +471,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         ctx.resume().catch(() => {});
       }
 
-      // Resume on user interaction if autoplay was blocked
       const unlockAudio = () => {
         if (ctx.state === 'suspended') {
           ctx.resume().catch(() => {});
@@ -358,14 +488,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         try {
           const now = ctx.currentTime;
-          // Dual-frequency chord (European/US telephone standard 440Hz + 480Hz)
           [480, 520].forEach(freq => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
             osc.type = 'sine';
             osc.frequency.setValueAtTime(freq, now);
 
-            // Ring-Ring pattern
             gain.gain.setValueAtTime(0, now);
             gain.gain.linearRampToValueAtTime(0.08, now + 0.05);
             gain.gain.linearRampToValueAtTime(0, now + 0.7);
@@ -389,70 +517,19 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Start Mic Capture for audio waveform visualizer
-  const startMicCapture = async () => {
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        streamRef.current = stream;
-
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        const ctx = new AudioCtx();
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 64;
-        const source = ctx.createMediaStreamSource(stream);
-        source.connect(analyser);
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-        const updateLevel = () => {
-          if (!streamRef.current) return;
-          analyser.getByteFrequencyData(dataArray);
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-          }
-          const avg = sum / dataArray.length;
-          setAudioLevel(Math.max(12, Math.min(100, avg * 1.8)));
-          animationFrameRef.current = requestAnimationFrame(updateLevel);
-        };
-        updateLevel();
-      }
-    } catch (e) {
-      console.log("Mic stream fallback active", e);
-      // Simulated live audio wave
-      const interval = setInterval(() => {
-        setAudioLevel(Math.floor(25 + Math.random() * 55));
-      }, 180);
-      return () => clearInterval(interval);
-    }
-  };
-
-  const stopMicCapture = () => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-  };
-
   // Real-time Firestore Listener for active calls
   useEffect(() => {
     if (!user) {
       setCurrentCall(null);
       setCallRole(null);
       stopAllTones();
-      stopMicCapture();
+      cleanupWebRTC();
       return;
     }
 
     const myUid = user.uid;
     const myEmailClean = (user.email || '').toLowerCase().trim();
 
-    // Listen to all active calls in active_calls collection
     const callsCol = collection(db, 'active_calls');
     const unsub = onSnapshot(callsCol, (snapshot) => {
       let activeCallFound: ActiveCallData | null = null;
@@ -486,10 +563,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCurrentCall(activeCallFound);
         setCallRole(roleFound);
       } else {
-        // If previous call ended or cancelled
         if (currentCall && (currentCall.status === 'ringing' || currentCall.status === 'connected')) {
           stopAllTones();
-          stopMicCapture();
+          cleanupWebRTC();
         }
         setCurrentCall(null);
         setCallRole(null);
@@ -505,7 +581,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!currentCall) {
       stopAllTones();
-      stopMicCapture();
+      cleanupWebRTC();
       setDuration(0);
       return;
     }
@@ -527,16 +603,17 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } else if (currentCall.status === 'connected') {
       toast.dismiss('incoming-call-alert-toast');
       stopAllTones();
-      startMicCapture();
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.play().catch(() => {});
+      }
     } else {
       toast.dismiss('incoming-call-alert-toast');
       stopAllTones();
-      stopMicCapture();
+      cleanupWebRTC();
     }
 
     return () => {
       stopAllTones();
-      stopMicCapture();
     };
   }, [currentCall?.status, callRole]);
 
@@ -729,7 +806,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const endCall = async () => {
     if (!currentCall) return;
     stopAllTones();
-    stopMicCapture();
     cleanupWebRTC();
 
     const wasConnected = currentCall.status === 'connected';
@@ -773,14 +849,29 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
     }
     setIsMuted(nextMute);
+    if (nextMute) {
+      toast.info("Mikrofon o'chirildi (Mute)");
+    } else {
+      toast.success("Mikrofon yoqildi");
+    }
   };
 
-  // Synchronize speaker mode with remote audio element
-  useEffect(() => {
+  const toggleSpeaker = () => {
+    const nextSpeaker = !isSpeakerOn;
+    setIsSpeakerOn(nextSpeaker);
     if (remoteAudioRef.current) {
-      remoteAudioRef.current.muted = !isSpeakerOn;
+      remoteAudioRef.current.muted = !nextSpeaker;
+      if (nextSpeaker) {
+        remoteAudioRef.current.volume = 1.0;
+        remoteAudioRef.current.play().catch(() => {});
+      }
     }
-  }, [isSpeakerOn]);
+    if (nextSpeaker) {
+      toast.success("Karnay yoqildi");
+    } else {
+      toast.info("Karnay o'chirildi");
+    }
+  };
 
   const formatTime = (secs: number) => {
     const mins = Math.floor(secs / 60);
@@ -804,8 +895,14 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       callRole,
       isCallModalOpen: !!currentCall
     }}>
-      {/* Hidden audio element to play remote peer voice stream */}
-      <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+      {/* Hidden audio element to continuously play remote peer voice stream */}
+      <audio 
+        ref={remoteAudioRef} 
+        autoPlay 
+        playsInline 
+        controls={false}
+        className="fixed -top-96 -left-96 opacity-0 pointer-events-none w-0 h-0"
+      />
 
       {children}
 
@@ -837,7 +934,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   />
                 ) : (
                   <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-3xl font-black text-white border-2 border-black">
-                    {partnerInfo?.name.charAt(0).toUpperCase()}
+                    {partnerInfo?.name?.charAt(0).toUpperCase() || 'U'}
                   </div>
                 )}
               </div>
@@ -852,7 +949,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 {partnerInfo?.email || 'CloudBot Cloud Member'}
               </p>
               <p className="text-xs text-cyan-300 font-medium mt-3 animate-pulse">
-                Sizga qo'ng'iroq qilmoqda...
+                Sizga ovozli qo'ng'iroq qilmoqda...
               </p>
             </div>
 
@@ -904,7 +1001,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   <img src={partnerInfo.avatar} alt={partnerInfo.name} className="w-10 h-10 rounded-xl object-cover border border-cyan-400/40" />
                 ) : (
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 to-teal-500 flex items-center justify-center font-bold text-white text-sm">
-                    {partnerInfo?.name.charAt(0).toUpperCase()}
+                    {partnerInfo?.name?.charAt(0).toUpperCase() || 'U'}
                   </div>
                 )}
                 <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full ring-2 ring-[#0d101c] animate-pulse" />
@@ -941,12 +1038,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
               id="voice-call-overlay"
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-2xl p-4 animate-in fade-in duration-200"
             >
-              <div className="relative w-full max-w-sm bg-gradient-to-b from-[#101426] via-[#0c0e1a] to-[#07080f] border border-cyan-500/40 rounded-3xl p-6 sm:p-8 shadow-[0_0_90px_rgba(6,182,212,0.18)] flex flex-col items-center justify-between min-h-[480px] overflow-hidden">
+              <div className="relative w-full max-w-sm bg-gradient-to-b from-[#101426] via-[#0c0e1a] to-[#07080f] border border-cyan-500/40 rounded-3xl p-6 sm:p-8 shadow-[0_0_90px_rgba(6,182,212,0.18)] flex flex-col items-center justify-between min-h-[490px] overflow-hidden">
                 
                 {/* Top Header */}
                 <div className="w-full flex items-center justify-between text-zinc-400">
                   <div className="flex items-center gap-1.5 text-xs text-cyan-400 bg-cyan-500/10 px-2.5 py-1 rounded-full border border-cyan-500/30">
-                    <Sparkles className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
+                    <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
                     <span className="font-semibold tracking-wide">HD Voice Link</span>
                   </div>
 
@@ -962,12 +1059,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
                 {/* Center: Avatar & Calling Info */}
                 <div className="flex flex-col items-center text-center my-auto w-full">
-                  <div className="relative mb-6">
+                  <div className="relative mb-5">
                     {currentCall.status === 'connected' ? (
                       <div 
                         className="absolute inset-0 rounded-full bg-cyan-500/20 animate-ping"
                         style={{
-                          transform: `scale(${1 + audioLevel / 150})`,
+                          transform: `scale(${1 + audioLevel / 130})`,
                           opacity: isMuted ? 0.1 : 0.4
                         }}
                       />
@@ -984,19 +1081,19 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         />
                       ) : (
                         <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-3xl font-black text-white border-2 border-black">
-                          {partnerInfo?.name.charAt(0).toUpperCase()}
+                          {partnerInfo?.name?.charAt(0).toUpperCase() || 'U'}
                         </div>
                       )}
                     </div>
                   </div>
 
                   <h3 className="text-xl font-black text-white tracking-tight mb-1">{partnerInfo?.name}</h3>
-                  <p className="text-xs text-zinc-400 font-mono mb-4">
+                  <p className="text-xs text-zinc-400 font-mono mb-3">
                     {partnerInfo?.email || 'CloudBot Cloud Member'}
                   </p>
 
                   {/* Call Status Badge */}
-                  <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/[0.05] border border-white/10 text-xs">
+                  <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/[0.05] border border-white/10 text-xs mb-3">
                     {currentCall.status === 'ringing' && (
                       <span className="text-teal-300 font-medium animate-pulse flex items-center gap-2">
                         <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
@@ -1013,17 +1110,22 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
                   {/* Live Audio Waveform visualizer when connected */}
                   {currentCall.status === 'connected' && (
-                    <div className="flex items-center justify-center gap-1 mt-6 h-8">
-                      {[40, 70, 90, 60, 100, 75, 45, 85, 55, 95, 65, 35].map((h, i) => {
-                        const heightPercent = isMuted ? 15 : Math.max(15, Math.min(100, (audioLevel / 100) * h));
-                        return (
-                          <div
-                            key={i}
-                            className="w-1 rounded-full bg-gradient-to-t from-cyan-500 to-emerald-400 transition-all duration-75"
-                            style={{ height: `${heightPercent}%` }}
-                          />
-                        );
-                      })}
+                    <div className="flex flex-col items-center gap-1.5 mt-2">
+                      <div className="flex items-center justify-center gap-1 h-8">
+                        {[35, 65, 85, 55, 95, 70, 40, 80, 50, 90, 60, 30].map((h, i) => {
+                          const heightPercent = isMuted ? 15 : Math.max(15, Math.min(100, (audioLevel / 100) * h));
+                          return (
+                            <div
+                              key={i}
+                              className="w-1 rounded-full bg-gradient-to-t from-cyan-500 to-emerald-400 transition-all duration-75"
+                              style={{ height: `${heightPercent}%` }}
+                            />
+                          );
+                        })}
+                      </div>
+                      <span className="text-[10px] text-zinc-400 font-medium">
+                        {isMuted ? "🔇 Mikrofon o'chirilgan" : "🎙️ Mikrofon faol (Ovoz uzatilmoqda)"}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -1058,7 +1160,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   {/* Speaker Button */}
                   <button
                     type="button"
-                    onClick={() => setIsSpeakerOn(prev => !prev)}
+                    onClick={toggleSpeaker}
                     className={`p-3.5 rounded-2xl transition-all cursor-pointer ${
                       !isSpeakerOn 
                         ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40' 
