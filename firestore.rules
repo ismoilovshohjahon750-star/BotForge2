@@ -67,10 +67,10 @@ service cloud.firestore {
 
     // Active Calls (Voice Calls & Signals)
     match /active_calls/{callId} {
-      allow read, write: if isSignedIn();
+      allow read, write: if true;
     }
     match /active_calls/{callId}/{allPaths=**} {
-      allow read, write: if isSignedIn();
+      allow read, write: if true;
     }
   }
 }

@@ -87,20 +87,35 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const animationFrameRef = useRef<number | null>(null);
   const unsubsRef = useRef<(() => void)[]>([]);
 
-  // Callback refs to instantly assign srcObject when elements mount in DOM
+  // Callback refs to instantly assign srcObject and unlock autoplay when elements mount in DOM
   const setLocalVideoNode = useCallback((node: HTMLVideoElement | null) => {
     localVideoRef.current = node;
-    if (node && localStreamRef.current) {
-      node.srcObject = localStreamRef.current;
-      node.play().catch(e => console.warn("Local video play notice:", e));
+    if (node) {
+      node.muted = true;
+      node.defaultMuted = true;
+      node.playsInline = true;
+      node.setAttribute('playsinline', 'true');
+      node.setAttribute('webkit-playsinline', 'true');
+      node.setAttribute('autoplay', 'true');
+      node.setAttribute('muted', 'true');
+      if (localStreamRef.current && localStreamRef.current.getVideoTracks().length > 0) {
+        node.srcObject = localStreamRef.current;
+        node.play().catch(e => console.warn("Local video play warning:", e));
+      }
     }
   }, []);
 
   const setRemoteVideoNode = useCallback((node: HTMLVideoElement | null) => {
     remoteVideoRef.current = node;
-    if (node && remoteStreamRef.current) {
-      node.srcObject = remoteStreamRef.current;
-      node.play().catch(e => console.warn("Remote video play notice:", e));
+    if (node) {
+      node.playsInline = true;
+      node.setAttribute('playsinline', 'true');
+      node.setAttribute('webkit-playsinline', 'true');
+      node.setAttribute('autoplay', 'true');
+      if (remoteStreamRef.current) {
+        node.srcObject = remoteStreamRef.current;
+        node.play().catch(e => console.warn("Remote video play warning:", e));
+      }
     }
   }, []);
 
@@ -118,25 +133,94 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     iceCandidatePoolSize: 10
   };
 
+  // Robust cross-platform media stream acquisition
+  const getMediaStream = async (isVideo: boolean): Promise<MediaStream> => {
+    if (isVideo) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: {
+            facingMode: 'user',
+            width: { ideal: 640 },
+            height: { ideal: 480 }
+          }
+        });
+      } catch (err1) {
+        console.warn("Primary video constraints failed, trying basic video constraints:", err1);
+        try {
+          return await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: true
+          });
+        } catch (err2) {
+          console.warn("Video failed, fallback to audio only:", err2);
+          return await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: false
+          });
+        }
+      }
+    } else {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
+          video: false
+        });
+      } catch (err1) {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false
+        });
+      }
+    }
+  };
+
   // Attach remote media stream to audio & video elements
   const attachRemoteStream = (remoteStream: MediaStream) => {
     remoteStreamRef.current = remoteStream;
 
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = remoteStream;
-      remoteAudioRef.current.muted = !isSpeakerOn;
-      remoteAudioRef.current.play().catch(e => console.warn("Remote audio play notice:", e));
+      remoteAudioRef.current.muted = false;
+      remoteAudioRef.current.volume = 1.0;
+      const playPromise = remoteAudioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => {
+          console.warn("Audio autoplay blocked by browser policy, unlocking on user gesture:", e);
+          const unlock = () => {
+            if (remoteAudioRef.current) {
+              remoteAudioRef.current.play().catch(() => {});
+            }
+            window.removeEventListener('click', unlock);
+            window.removeEventListener('touchstart', unlock);
+          };
+          window.addEventListener('click', unlock);
+          window.addEventListener('touchstart', unlock);
+        });
+      }
     }
+
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(e => console.warn("Remote video play notice:", e));
+      remoteVideoRef.current.play().catch(e => console.warn("Remote video play warning:", e));
     }
 
-    const videoTracks = remoteStream.getVideoTracks();
-    const hasVid = videoTracks.length > 0 && videoTracks.some(t => t.enabled);
-    setHasRemoteVideo(hasVid);
+    const checkVideoTracks = () => {
+      const videoTracks = remoteStream.getVideoTracks();
+      const hasVid = videoTracks.length > 0 && videoTracks.some(t => t.enabled);
+      setHasRemoteVideo(hasVid);
+    };
+    checkVideoTracks();
 
-    videoTracks.forEach(track => {
+    remoteStream.getVideoTracks().forEach(track => {
       track.onunmute = () => {
         setHasRemoteVideo(true);
         if (remoteVideoRef.current && remoteStreamRef.current) {
@@ -144,8 +228,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
           remoteVideoRef.current.play().catch(() => {});
         }
       };
-      track.onmute = () => setHasRemoteVideo(false);
-      track.onended = () => setHasRemoteVideo(false);
+      track.onmute = () => checkVideoTracks();
+      track.onended = () => checkVideoTracks();
     });
   };
 
@@ -222,33 +306,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const initCallerWebRTC = async (callId: string, isRequestedVideo: boolean) => {
     cleanupWebRTC();
     try {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }, 
-          video: isRequestedVideo ? {
-            facingMode: 'user',
-            width: { ideal: 640, max: 1280 },
-            height: { ideal: 480, max: 720 }
-          } : false 
-        });
-      } catch (primaryErr) {
-        console.warn("Primary media request failed, trying fallback:", primaryErr);
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: isRequestedVideo ? true : false
-          });
-        } catch (videoErr) {
-          console.warn("Fallback video failed, using audio only:", videoErr);
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        }
-      }
-
+      const stream = await getMediaStream(isRequestedVideo);
       localStreamRef.current = stream;
       streamRef.current = stream;
       const hasLocalVideo = stream.getVideoTracks().length > 0;
@@ -271,9 +329,15 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Receive remote tracks
       pc.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-          attachRemoteStream(event.streams[0]);
+        let remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : null;
+        if (!remoteStream) {
+          if (!remoteStreamRef.current) {
+            remoteStreamRef.current = new MediaStream();
+          }
+          remoteStreamRef.current.addTrack(event.track);
+          remoteStream = remoteStreamRef.current;
         }
+        attachRemoteStream(remoteStream);
       };
 
       // Send local ICE candidates to Firestore
@@ -289,7 +353,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Create and set SDP Offer
       const offerDescription = await pc.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: isRequestedVideo
+        offerToReceiveVideo: true
       });
       await pc.setLocalDescription(offerDescription);
 
@@ -356,33 +420,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const initReceiverWebRTC = async (callId: string, isRequestedVideo: boolean) => {
     cleanupWebRTC();
     try {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }, 
-          video: isRequestedVideo ? {
-            facingMode: 'user',
-            width: { ideal: 640, max: 1280 },
-            height: { ideal: 480, max: 720 }
-          } : false 
-        });
-      } catch (primaryErr) {
-        console.warn("Primary media request failed, trying fallback:", primaryErr);
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: isRequestedVideo ? true : false
-          });
-        } catch (videoErr) {
-          console.warn("Fallback video failed, using audio only:", videoErr);
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        }
-      }
-
+      const stream = await getMediaStream(isRequestedVideo);
       localStreamRef.current = stream;
       streamRef.current = stream;
       const hasLocalVideo = stream.getVideoTracks().length > 0;
@@ -405,9 +443,15 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Receive remote tracks
       pc.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-          attachRemoteStream(event.streams[0]);
+        let remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : null;
+        if (!remoteStream) {
+          if (!remoteStreamRef.current) {
+            remoteStreamRef.current = new MediaStream();
+          }
+          remoteStreamRef.current.addTrack(event.track);
+          remoteStream = remoteStreamRef.current;
         }
+        attachRemoteStream(remoteStream);
       };
 
       // Send local ICE candidates to Firestore
@@ -1053,8 +1097,13 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isMuted,
       isSpeakerOn
     }}>
-      {/* Hidden audio element to play remote peer voice stream */}
-      <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+      {/* Hidden audio element to play remote peer voice stream without browser throttling */}
+      <audio 
+        ref={remoteAudioRef} 
+        autoPlay 
+        playsInline 
+        className="opacity-0 pointer-events-none fixed -top-96 -left-96 w-1 h-1" 
+      />
 
       {children}
 
