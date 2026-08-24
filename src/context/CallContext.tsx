@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { db } from '../lib/firebase';
 import { 
@@ -79,12 +79,30 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Media & WebRTC refs
   const streamRef = useRef<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const unsubsRef = useRef<(() => void)[]>([]);
+
+  // Callback refs to instantly assign srcObject when elements mount in DOM
+  const setLocalVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    localVideoRef.current = node;
+    if (node && localStreamRef.current) {
+      node.srcObject = localStreamRef.current;
+      node.play().catch(e => console.warn("Local video play notice:", e));
+    }
+  }, []);
+
+  const setRemoteVideoNode = useCallback((node: HTMLVideoElement | null) => {
+    remoteVideoRef.current = node;
+    if (node && remoteStreamRef.current) {
+      node.srcObject = remoteStreamRef.current;
+      node.play().catch(e => console.warn("Remote video play notice:", e));
+    }
+  }, []);
 
   // WebRTC STUN Servers
   const RTC_SERVERS = {
@@ -125,6 +143,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
     }
+    remoteStreamRef.current = null;
     setIsVideoEnabled(false);
     setHasRemoteVideo(false);
   };
@@ -179,17 +198,28 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Receive remote tracks
       pc.ontrack = (event) => {
-        if (event.streams[0]) {
+        if (event.streams && event.streams[0]) {
+          const remoteStream = event.streams[0];
+          remoteStreamRef.current = remoteStream;
+
           if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = event.streams[0];
+            remoteAudioRef.current.srcObject = remoteStream;
             remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
           }
           if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = event.streams[0];
+            remoteVideoRef.current.srcObject = remoteStream;
             remoteVideoRef.current.play().catch(e => console.warn("Remote video autoplay notice:", e));
           }
-          const hasVid = event.streams[0].getVideoTracks().length > 0;
+
+          const videoTracks = remoteStream.getVideoTracks();
+          const hasVid = videoTracks.length > 0 && videoTracks.some(t => t.enabled);
           setHasRemoteVideo(hasVid);
+
+          videoTracks.forEach(track => {
+            track.onunmute = () => setHasRemoteVideo(true);
+            track.onmute = () => setHasRemoteVideo(false);
+            track.onended = () => setHasRemoteVideo(false);
+          });
         }
       };
 
@@ -259,17 +289,28 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // Receive remote tracks
       pc.ontrack = (event) => {
-        if (event.streams[0]) {
+        if (event.streams && event.streams[0]) {
+          const remoteStream = event.streams[0];
+          remoteStreamRef.current = remoteStream;
+
           if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = event.streams[0];
+            remoteAudioRef.current.srcObject = remoteStream;
             remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
           }
           if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = event.streams[0];
+            remoteVideoRef.current.srcObject = remoteStream;
             remoteVideoRef.current.play().catch(e => console.warn("Remote video autoplay notice:", e));
           }
-          const hasVid = event.streams[0].getVideoTracks().length > 0;
+
+          const videoTracks = remoteStream.getVideoTracks();
+          const hasVid = videoTracks.length > 0 && videoTracks.some(t => t.enabled);
           setHasRemoteVideo(hasVid);
+
+          videoTracks.forEach(track => {
+            track.onunmute = () => setHasRemoteVideo(true);
+            track.onmute = () => setHasRemoteVideo(false);
+            track.onended = () => setHasRemoteVideo(false);
+          });
         }
       };
 
@@ -691,9 +732,18 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sync video elements with streams
   useEffect(() => {
     if (localVideoRef.current && localStreamRef.current) {
-      localVideoRef.current.srcObject = localStreamRef.current;
+      if (localVideoRef.current.srcObject !== localStreamRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
+      localVideoRef.current.play().catch(() => {});
     }
-  }, [currentCall?.status, isVideoEnabled]);
+    if (remoteVideoRef.current && remoteStreamRef.current) {
+      if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) {
+        remoteVideoRef.current.srcObject = remoteStreamRef.current;
+      }
+      remoteVideoRef.current.play().catch(() => {});
+    }
+  }, [currentCall?.status, isVideoEnabled, hasRemoteVideo, isMinimized]);
 
   // Start outgoing call
   const startCall = async ({
@@ -1085,7 +1135,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   {isVideoEnabled && (
                     <div className="absolute top-2 right-2 z-20 w-28 h-36 sm:w-36 sm:h-48 rounded-2xl overflow-hidden border-2 border-cyan-400/80 shadow-2xl bg-slate-900">
                       <video 
-                        ref={localVideoRef} 
+                        ref={setLocalVideoNode} 
                         autoPlay 
                         playsInline 
                         muted 
@@ -1101,7 +1151,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   {currentCall.status === 'connected' && hasRemoteVideo ? (
                     <div className="relative w-full h-72 sm:h-80 rounded-2xl overflow-hidden bg-black border border-white/10 shadow-2xl">
                       <video 
-                        ref={remoteVideoRef} 
+                        ref={setRemoteVideoNode} 
                         autoPlay 
                         playsInline 
                         className="w-full h-full object-cover" 
