@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { 
   Phone, PhoneOff, PhoneCall, PhoneIncoming, Mic, MicOff, 
   Volume2, VolumeX, Minimize2, Maximize2, Sparkles, ShieldAlert, X,
-  Video, VideoOff, Camera
+  Video, VideoOff, Camera, CameraOff
 } from 'lucide-react';
 
 export interface ActiveCallData {
@@ -1129,39 +1129,71 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 </div>
 
                 {/* Main Content Area */}
-                <div className="relative w-full my-auto flex flex-col items-center justify-center min-h-[300px]">
+                <div className="relative w-full my-auto flex flex-col items-center justify-center min-h-[320px]">
                   
-                  {/* Local Camera Picture-in-Picture Floating Overlay */}
-                  {isVideoEnabled && (
-                    <div className="absolute top-2 right-2 z-20 w-28 h-36 sm:w-36 sm:h-48 rounded-2xl overflow-hidden border-2 border-cyan-400/80 shadow-2xl bg-slate-900">
-                      <video 
-                        ref={setLocalVideoNode} 
-                        autoPlay 
-                        playsInline 
-                        muted 
-                        className="w-full h-full object-cover transform -scale-x-100" 
-                      />
-                      <div className="absolute bottom-1.5 left-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded-full text-[10px] text-white font-medium">
-                        Siz (Kamera)
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Remote Video Stream or Avatar Display */}
-                  {currentCall.status === 'connected' && hasRemoteVideo ? (
-                    <div className="relative w-full h-72 sm:h-80 rounded-2xl overflow-hidden bg-black border border-white/10 shadow-2xl">
+                  {isVideoCall ? (
+                    /* VIDEO CALL STAGE */
+                    <div className="relative w-full h-72 sm:h-80 rounded-2xl overflow-hidden bg-slate-950 border border-cyan-500/30 shadow-2xl flex items-center justify-center">
+                      
+                      {/* Remote Video Stream Element - Always mounted in DOM during video call stage */}
                       <video 
                         ref={setRemoteVideoNode} 
                         autoPlay 
                         playsInline 
-                        className="w-full h-full object-cover" 
+                        className={`w-full h-full object-cover transition-opacity duration-300 ${hasRemoteVideo ? 'opacity-100' : 'opacity-0 absolute'}`} 
                       />
-                      <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full text-xs text-white font-medium border border-white/10">
-                        {partnerInfo?.name}
+
+                      {/* Fallback Overlay when remote video stream is loading or inactive */}
+                      {!hasRemoteVideo && (
+                        <div className="flex flex-col items-center text-center p-4 z-10">
+                          <div className="w-20 h-20 rounded-full p-1 bg-gradient-to-tr from-cyan-500 via-teal-400 to-emerald-500 mb-3 shadow-[0_0_20px_rgba(6,182,212,0.3)]">
+                            {partnerInfo?.avatar ? (
+                              <img src={partnerInfo.avatar} alt={partnerInfo.name} className="w-full h-full rounded-full object-cover bg-slate-900" />
+                            ) : (
+                              <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-xl font-bold text-white">
+                                {partnerInfo?.name.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-sm font-bold text-white mb-1">{partnerInfo?.name}</p>
+                          <p className="text-xs text-cyan-300 font-medium animate-pulse flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                            {currentCall.status === 'ringing' 
+                              ? "Gudok ketmoqda..." 
+                              : "Suhbatdosh kamerasi yuklanmoqda..."}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Remote Participant Name & Status Badge */}
+                      <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-md px-3 py-1 rounded-full text-xs text-white font-medium border border-white/10 flex items-center gap-2 z-10">
+                        <span className={`w-2 h-2 rounded-full ${hasRemoteVideo ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                        <span>{partnerInfo?.name}</span>
                       </div>
+
+                      {/* Floating Local Camera PiP Overlay (Top Right) */}
+                      <div className="absolute top-3 right-3 z-20 w-28 h-36 sm:w-32 sm:h-44 rounded-2xl overflow-hidden border-2 border-cyan-400/80 shadow-2xl bg-slate-900 flex items-center justify-center">
+                        <video 
+                          ref={setLocalVideoNode} 
+                          autoPlay 
+                          playsInline 
+                          muted 
+                          className={`w-full h-full object-cover transform -scale-x-100 ${isVideoEnabled ? 'block' : 'hidden'}`} 
+                        />
+                        {!isVideoEnabled && (
+                          <div className="flex flex-col items-center justify-center text-zinc-400 text-[10px] p-2 text-center bg-slate-900/90">
+                            <CameraOff className="w-5 h-5 mb-1 text-cyan-400/60" />
+                            <span>Kamera o'chiq</span>
+                          </div>
+                        )}
+                        <div className="absolute bottom-1.5 left-1.5 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded-full text-[10px] text-white font-medium">
+                          Siz
+                        </div>
+                      </div>
+
                     </div>
                   ) : (
-                    /* Avatar and Voice Info */
+                    /* AUDIO CALL AVATAR VIEW */
                     <div className="flex flex-col items-center text-center my-auto w-full py-4">
                       <div className="relative mb-6">
                         {currentCall.status === 'connected' ? (
