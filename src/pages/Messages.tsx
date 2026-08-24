@@ -7,7 +7,7 @@ import { safeAddDoc, safeSetDoc, safeDeleteDoc, safeUpdateDoc } from '../lib/saf
 import { 
   MessageSquare, Send, Plus, Search, Trash2, CheckCheck,
   User, ShieldAlert, Clock, ArrowLeft, RefreshCw, X, Sparkles, MessageCircle,
-  Paperclip, Smile, Phone, Video, Download, File, FileText, FileCode,
+  Paperclip, Smile, Phone, Download, File, FileText, FileCode,
   FileArchive, FileSpreadsheet, Film, Music, Check, Shield, Circle,
   ChevronRight, Copy, ExternalLink, Bot, Inbox, Filter
 } from 'lucide-react';
@@ -861,7 +861,7 @@ export const Messages: React.FC = () => {
     );
   };
 
-  const handleInitiateCall = (m: ContactMessage, callType: 'audio' | 'video' = 'audio') => {
+  const handleInitiateCall = (m: ContactMessage) => {
     if (!m || !user) return;
     const partner = getChatPartner(m);
     
@@ -888,8 +888,7 @@ export const Messages: React.FC = () => {
       receiverName: partner.name || 'Foydalanuvchi',
       receiverId: receiverUid,
       receiverAvatar: partner.photoURL,
-      isSupport: partner.isSupport,
-      callType
+      isSupport: partner.isSupport
     });
   };
 
@@ -1220,18 +1219,11 @@ export const Messages: React.FC = () => {
 
               <div className="flex items-center gap-1.5">
                 <button 
-                  onClick={() => handleInitiateCall(activeMsg, 'audio')}
+                  onClick={() => handleInitiateCall(activeMsg)}
                   className="p-2.5 rounded-xl hover:bg-cyan-500/20 text-zinc-400 hover:text-cyan-300 transition-colors border border-transparent hover:border-cyan-500/30 cursor-pointer" 
                   title="Ovozli qo'ng'iroq qilish"
                 >
                   <Phone className="w-4 h-4" />
-                </button>
-                <button 
-                  onClick={() => handleInitiateCall(activeMsg, 'video')}
-                  className="p-2.5 rounded-xl hover:bg-teal-500/20 text-zinc-400 hover:text-teal-300 transition-colors border border-transparent hover:border-teal-500/30 cursor-pointer" 
-                  title="Video qo'ng'iroq qilish"
-                >
-                  <Video className="w-4 h-4" />
                 </button>
                 <button 
                   onClick={() => triggerDeleteSingle(activeMsg.id)}

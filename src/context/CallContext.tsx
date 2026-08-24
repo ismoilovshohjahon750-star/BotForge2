@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { db } from '../lib/firebase';
 import { 
@@ -9,8 +9,7 @@ import { safeSetDoc, safeUpdateDoc, safeAddDoc } from '../lib/safeFirestore';
 import { toast } from 'sonner';
 import { 
   Phone, PhoneOff, PhoneCall, PhoneIncoming, Mic, MicOff, 
-  Volume2, VolumeX, Minimize2, Maximize2, Sparkles, ShieldAlert, X,
-  Video, VideoOff, Camera, CameraOff
+  Volume2, VolumeX, Minimize2, Maximize2, Sparkles, ShieldAlert, X 
 } from 'lucide-react';
 
 export interface ActiveCallData {
@@ -25,7 +24,6 @@ export interface ActiveCallData {
   receiverName: string;
   receiverAvatar?: string;
   status: 'ringing' | 'connected' | 'rejected' | 'ended' | 'missed' | 'cancelled';
-  callType?: 'audio' | 'video';
   createdAt: string;
   answeredAt?: string | null;
   endedAt?: string | null;
@@ -40,20 +38,13 @@ interface CallContextType {
     receiverId?: string;
     receiverAvatar?: string;
     isSupport?: boolean;
-    callType?: 'audio' | 'video';
   }) => Promise<void>;
   endCall: () => Promise<void>;
   acceptCall: () => Promise<void>;
   rejectCall: () => Promise<void>;
-  toggleVideo: () => void;
-  toggleMute: () => void;
-  toggleSpeaker: () => void;
   currentCall: ActiveCallData | null;
   callRole: 'caller' | 'receiver' | null;
   isCallModalOpen: boolean;
-  isVideoEnabled: boolean;
-  isMuted: boolean;
-  isSpeakerOn: boolean;
 }
 
 const CallContext = createContext<CallContextType | undefined>(undefined);
@@ -65,8 +56,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [duration, setDuration] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState<boolean>(true);
-  const [isVideoEnabled, setIsVideoEnabled] = useState<boolean>(false);
-  const [hasRemoteVideo, setHasRemoteVideo] = useState<boolean>(false);
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
   const [audioLevel, setAudioLevel] = useState<number>(15);
 
@@ -79,158 +68,16 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Media & WebRTC refs
   const streamRef = useRef<MediaStream | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
-  const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const unsubsRef = useRef<(() => void)[]>([]);
 
-  // Callback refs to instantly assign srcObject and unlock autoplay when elements mount in DOM
-  const setLocalVideoNode = useCallback((node: HTMLVideoElement | null) => {
-    localVideoRef.current = node;
-    if (node) {
-      node.muted = true;
-      node.defaultMuted = true;
-      node.playsInline = true;
-      node.setAttribute('playsinline', 'true');
-      node.setAttribute('webkit-playsinline', 'true');
-      node.setAttribute('autoplay', 'true');
-      node.setAttribute('muted', 'true');
-      if (localStreamRef.current && localStreamRef.current.getVideoTracks().length > 0) {
-        node.srcObject = localStreamRef.current;
-        node.play().catch(e => console.warn("Local video play warning:", e));
-      }
-    }
-  }, []);
-
-  const setRemoteVideoNode = useCallback((node: HTMLVideoElement | null) => {
-    remoteVideoRef.current = node;
-    if (node) {
-      node.playsInline = true;
-      node.setAttribute('playsinline', 'true');
-      node.setAttribute('webkit-playsinline', 'true');
-      node.setAttribute('autoplay', 'true');
-      if (remoteStreamRef.current) {
-        node.srcObject = remoteStreamRef.current;
-        node.play().catch(e => console.warn("Remote video play warning:", e));
-      }
-    }
-  }, []);
-
   // WebRTC STUN Servers
-  const RTC_SERVERS: RTCConfiguration = {
+  const RTC_SERVERS = {
     iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun4.l.google.com:19302' },
-      { urls: 'stun:stun.services.mozilla.com' },
-      { urls: 'stun:global.stun.twilio.com:3478' }
-    ],
-    iceCandidatePoolSize: 10
-  };
-
-  // Robust cross-platform media stream acquisition
-  const getMediaStream = async (isVideo: boolean): Promise<MediaStream> => {
-    if (isVideo) {
-      try {
-        return await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: {
-            facingMode: 'user',
-            width: { ideal: 640 },
-            height: { ideal: 480 }
-          }
-        });
-      } catch (err1) {
-        console.warn("Primary video constraints failed, trying basic video constraints:", err1);
-        try {
-          return await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: true
-          });
-        } catch (err2) {
-          console.warn("Video failed, fallback to audio only:", err2);
-          return await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: false
-          });
-        }
-      }
-    } else {
-      try {
-        return await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          },
-          video: false
-        });
-      } catch (err1) {
-        return await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: false
-        });
-      }
-    }
-  };
-
-  // Attach remote media stream to audio & video elements
-  const attachRemoteStream = (remoteStream: MediaStream) => {
-    remoteStreamRef.current = remoteStream;
-
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.srcObject = remoteStream;
-      remoteAudioRef.current.muted = false;
-      remoteAudioRef.current.volume = 1.0;
-      const playPromise = remoteAudioRef.current.play();
-      if (playPromise !== undefined) {
-        playPromise.catch(e => {
-          console.warn("Audio autoplay blocked by browser policy, unlocking on user gesture:", e);
-          const unlock = () => {
-            if (remoteAudioRef.current) {
-              remoteAudioRef.current.play().catch(() => {});
-            }
-            window.removeEventListener('click', unlock);
-            window.removeEventListener('touchstart', unlock);
-          };
-          window.addEventListener('click', unlock);
-          window.addEventListener('touchstart', unlock);
-        });
-      }
-    }
-
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(e => console.warn("Remote video play warning:", e));
-    }
-
-    const checkVideoTracks = () => {
-      const videoTracks = remoteStream.getVideoTracks();
-      const hasVid = videoTracks.length > 0 && videoTracks.some(t => t.enabled);
-      setHasRemoteVideo(hasVid);
-    };
-    checkVideoTracks();
-
-    remoteStream.getVideoTracks().forEach(track => {
-      track.onunmute = () => {
-        setHasRemoteVideo(true);
-        if (remoteVideoRef.current && remoteStreamRef.current) {
-          remoteVideoRef.current.srcObject = remoteStreamRef.current;
-          remoteVideoRef.current.play().catch(() => {});
-        }
-      };
-      track.onmute = () => checkVideoTracks();
-      track.onended = () => checkVideoTracks();
-    });
+      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }
+    ]
   };
 
   // Cleanup WebRTC & Streams
@@ -244,8 +91,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         peerConnectionRef.current.ontrack = null;
         peerConnectionRef.current.onicecandidate = null;
-        peerConnectionRef.current.oniceconnectionstatechange = null;
-        peerConnectionRef.current.onconnectionstatechange = null;
         peerConnectionRef.current.close();
       } catch (e) {}
       peerConnectionRef.current = null;
@@ -261,22 +106,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (remoteAudioRef.current) {
       remoteAudioRef.current.srcObject = null;
     }
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = null;
-    }
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = null;
-    }
-    remoteStreamRef.current = null;
-    setIsVideoEnabled(false);
-    setHasRemoteVideo(false);
   };
 
   // Start Visualizer for local mic
   const startVisualizer = (stream: MediaStream) => {
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
       const ctx = new AudioCtx();
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 64;
@@ -303,58 +138,37 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Initialize Caller WebRTC
-  const initCallerWebRTC = async (callId: string, isRequestedVideo: boolean) => {
+  const initCallerWebRTC = async (callId: string) => {
     cleanupWebRTC();
     try {
-      const stream = await getMediaStream(isRequestedVideo);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       localStreamRef.current = stream;
       streamRef.current = stream;
-      const hasLocalVideo = stream.getVideoTracks().length > 0;
-      setIsVideoEnabled(hasLocalVideo);
       startVisualizer(stream);
-
-      if (localVideoRef.current && hasLocalVideo) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play().catch(() => {});
-      }
 
       const pc = new RTCPeerConnection(RTC_SERVERS);
       peerConnectionRef.current = pc;
 
-      let callerRemoteDescSet = false;
-      const callerPendingCandidates: RTCIceCandidateInit[] = [];
-
-      // Add local audio and video tracks to PeerConnection
+      // Add local audio track
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Receive remote tracks
+      // Receive remote audio track
       pc.ontrack = (event) => {
-        let remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : null;
-        if (!remoteStream) {
-          if (!remoteStreamRef.current) {
-            remoteStreamRef.current = new MediaStream();
-          }
-          remoteStreamRef.current.addTrack(event.track);
-          remoteStream = remoteStreamRef.current;
+        if (remoteAudioRef.current && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
         }
-        attachRemoteStream(remoteStream);
       };
 
-      // Send local ICE candidates to Firestore
+      // ICE candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          const candJson = event.candidate.toJSON();
-          if (candJson.candidate) {
-            safeAddDoc(collection(db, 'active_calls', callId, 'callerCandidates'), candJson);
-          }
+          safeAddDoc(collection(db, 'active_calls', callId, 'callerCandidates'), event.candidate.toJSON());
         }
       };
 
-      // Create and set SDP Offer
-      const offerDescription = await pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      });
+      // SDP Offer
+      const offerDescription = await pc.createOffer();
       await pc.setLocalDescription(offerDescription);
 
       const offer = {
@@ -364,47 +178,22 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'offer'), offer);
 
-      // Listen for Answer from Receiver
-      const unsubAnswer = onSnapshot(doc(db, 'active_calls', callId, 'webrtc', 'answer'), async (snapshot) => {
-        if (snapshot.exists() && peerConnectionRef.current && !callerRemoteDescSet) {
+      // Listen for Answer
+      const unsubAnswer = onSnapshot(doc(db, 'active_calls', callId, 'webrtc', 'answer'), (snapshot) => {
+        if (snapshot.exists() && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
           const data = snapshot.data();
-          if (data && data.sdp && data.type) {
-            try {
-              const answerDescription = new RTCSessionDescription({ sdp: data.sdp, type: data.type });
-              await peerConnectionRef.current.setRemoteDescription(answerDescription);
-              callerRemoteDescSet = true;
-
-              // Process queued candidates
-              while (callerPendingCandidates.length > 0) {
-                const cand = callerPendingCandidates.shift();
-                if (cand && peerConnectionRef.current) {
-                  await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(e => console.warn("Add queued candidate error:", e));
-                }
-              }
-            } catch (err) {
-              console.warn("Caller setRemoteDescription error:", err);
-            }
-          }
+          const answerDescription = new RTCSessionDescription({ sdp: data.sdp, type: data.type });
+          peerConnectionRef.current.setRemoteDescription(answerDescription).catch(e => console.warn("Set remote desc error:", e));
         }
       });
       unsubsRef.current.push(unsubAnswer);
 
       // Listen for Receiver ICE Candidates
       const unsubRecCand = onSnapshot(collection(db, 'active_calls', callId, 'receiverCandidates'), (snapshot) => {
-        snapshot.docChanges().forEach(async (change) => {
-          if (change.type === 'added') {
-            const candidateData = change.doc.data() as RTCIceCandidateInit;
-            if (candidateData && candidateData.candidate) {
-              if (peerConnectionRef.current && callerRemoteDescSet && peerConnectionRef.current.remoteDescription) {
-                try {
-                  await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidateData));
-                } catch (e) {
-                  console.warn("Add ICE candidate error:", e);
-                }
-              } else {
-                callerPendingCandidates.push(candidateData);
-              }
-            }
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added' && peerConnectionRef.current) {
+            const candidate = new RTCIceCandidate(change.doc.data());
+            peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
           }
         });
       });
@@ -412,118 +201,71 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     } catch (err) {
       console.error("Caller WebRTC init error:", err);
-      toast.error("Media qurilmalarni ulashda xatolik yuz berdi");
+      toast.error("Mikrofonni ulashda xatolik yuz berdi");
     }
   };
 
   // Initialize Receiver WebRTC
-  const initReceiverWebRTC = async (callId: string, isRequestedVideo: boolean) => {
+  const initReceiverWebRTC = async (callId: string) => {
     cleanupWebRTC();
     try {
-      const stream = await getMediaStream(isRequestedVideo);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       localStreamRef.current = stream;
       streamRef.current = stream;
-      const hasLocalVideo = stream.getVideoTracks().length > 0;
-      setIsVideoEnabled(hasLocalVideo);
       startVisualizer(stream);
-
-      if (localVideoRef.current && hasLocalVideo) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play().catch(() => {});
-      }
 
       const pc = new RTCPeerConnection(RTC_SERVERS);
       peerConnectionRef.current = pc;
 
-      let receiverRemoteDescSet = false;
-      const receiverPendingCandidates: RTCIceCandidateInit[] = [];
-
-      // Add local tracks to PeerConnection
+      // Add local audio track
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-      // Receive remote tracks
+      // Receive remote audio track
       pc.ontrack = (event) => {
-        let remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : null;
-        if (!remoteStream) {
-          if (!remoteStreamRef.current) {
-            remoteStreamRef.current = new MediaStream();
-          }
-          remoteStreamRef.current.addTrack(event.track);
-          remoteStream = remoteStreamRef.current;
+        if (remoteAudioRef.current && event.streams[0]) {
+          remoteAudioRef.current.srcObject = event.streams[0];
+          remoteAudioRef.current.play().catch(e => console.warn("Remote audio autoplay notice:", e));
         }
-        attachRemoteStream(remoteStream);
       };
 
-      // Send local ICE candidates to Firestore
+      // ICE candidates
       pc.onicecandidate = (event) => {
         if (event.candidate) {
-          const candJson = event.candidate.toJSON();
-          if (candJson.candidate) {
-            safeAddDoc(collection(db, 'active_calls', callId, 'receiverCandidates'), candJson);
-          }
+          safeAddDoc(collection(db, 'active_calls', callId, 'receiverCandidates'), event.candidate.toJSON());
         }
       };
 
-      // Listen for Caller ICE Candidates
+      // Listen for Caller Candidates
       const unsubCallerCand = onSnapshot(collection(db, 'active_calls', callId, 'callerCandidates'), (snapshot) => {
-        snapshot.docChanges().forEach(async (change) => {
-          if (change.type === 'added') {
-            const candidateData = change.doc.data() as RTCIceCandidateInit;
-            if (candidateData && candidateData.candidate) {
-              if (peerConnectionRef.current && receiverRemoteDescSet && peerConnectionRef.current.remoteDescription) {
-                try {
-                  await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidateData));
-                } catch (e) {
-                  console.warn("Add caller ICE candidate error:", e);
-                }
-              } else {
-                receiverPendingCandidates.push(candidateData);
-              }
-            }
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'added' && peerConnectionRef.current) {
+            const candidate = new RTCIceCandidate(change.doc.data());
+            peerConnectionRef.current.addIceCandidate(candidate).catch(() => {});
           }
         });
       });
       unsubsRef.current.push(unsubCallerCand);
 
-      // Listen for SDP Offer from Caller and Create Answer
-      const unsubOffer = onSnapshot(doc(db, 'active_calls', callId, 'webrtc', 'offer'), async (offerSnap) => {
-        if (offerSnap.exists() && peerConnectionRef.current && !receiverRemoteDescSet) {
-          const offerData = offerSnap.data();
-          if (offerData && offerData.sdp && offerData.type) {
-            try {
-              const offerDescription = new RTCSessionDescription({ sdp: offerData.sdp, type: offerData.type });
-              await peerConnectionRef.current.setRemoteDescription(offerDescription);
-              receiverRemoteDescSet = true;
+      // Fetch SDP Offer from Caller and Create Answer
+      const offerSnap = await getDoc(doc(db, 'active_calls', callId, 'webrtc', 'offer'));
+      if (offerSnap.exists()) {
+        const offerData = offerSnap.data();
+        await pc.setRemoteDescription(new RTCSessionDescription({ sdp: offerData.sdp, type: offerData.type }));
 
-              // Process queued caller candidates
-              while (receiverPendingCandidates.length > 0) {
-                const cand = receiverPendingCandidates.shift();
-                if (cand && peerConnectionRef.current) {
-                  await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(cand)).catch(e => console.warn("Add queued candidate error:", e));
-                }
-              }
+        const answerDescription = await pc.createAnswer();
+        await pc.setLocalDescription(answerDescription);
 
-              // Create local Answer
-              const answerDescription = await peerConnectionRef.current.createAnswer();
-              await peerConnectionRef.current.setLocalDescription(answerDescription);
+        const answer = {
+          sdp: answerDescription.sdp,
+          type: answerDescription.type
+        };
 
-              const answer = {
-                sdp: answerDescription.sdp,
-                type: answerDescription.type
-              };
-
-              await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'answer'), answer);
-            } catch (err) {
-              console.error("Receiver SDP Answer creation error:", err);
-            }
-          }
-        }
-      });
-      unsubsRef.current.push(unsubOffer);
+        await safeSetDoc(doc(db, 'active_calls', callId, 'webrtc', 'answer'), answer);
+      }
 
     } catch (err) {
       console.error("Receiver WebRTC init error:", err);
-      toast.error("Media qurilmalarni ulashda xatolik yuz berdi");
+      toast.error("Mikrofonni ulashda xatolik yuz berdi");
     }
   };
 
@@ -647,10 +389,53 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const stopVisualizer = () => {
+  // Start Mic Capture for audio waveform visualizer
+  const startMicCapture = async () => {
+    try {
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = stream;
+
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioCtx();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 64;
+        const source = ctx.createMediaStreamSource(stream);
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        const updateLevel = () => {
+          if (!streamRef.current) return;
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avg = sum / dataArray.length;
+          setAudioLevel(Math.max(12, Math.min(100, avg * 1.8)));
+          animationFrameRef.current = requestAnimationFrame(updateLevel);
+        };
+        updateLevel();
+      }
+    } catch (e) {
+      console.log("Mic stream fallback active", e);
+      // Simulated live audio wave
+      const interval = setInterval(() => {
+        setAudioLevel(Math.floor(25 + Math.random() * 55));
+      }, 180);
+      return () => clearInterval(interval);
+    }
+  };
+
+  const stopMicCapture = () => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
   };
 
@@ -660,7 +445,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentCall(null);
       setCallRole(null);
       stopAllTones();
-      stopVisualizer();
+      stopMicCapture();
       return;
     }
 
@@ -704,7 +489,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // If previous call ended or cancelled
         if (currentCall && (currentCall.status === 'ringing' || currentCall.status === 'connected')) {
           stopAllTones();
-          stopVisualizer();
+          stopMicCapture();
         }
         setCurrentCall(null);
         setCallRole(null);
@@ -720,7 +505,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!currentCall) {
       stopAllTones();
-      stopVisualizer();
+      stopMicCapture();
       setDuration(0);
       return;
     }
@@ -742,15 +527,16 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } else if (currentCall.status === 'connected') {
       toast.dismiss('incoming-call-alert-toast');
       stopAllTones();
+      startMicCapture();
     } else {
       toast.dismiss('incoming-call-alert-toast');
       stopAllTones();
-      stopVisualizer();
+      stopMicCapture();
     }
 
     return () => {
       stopAllTones();
-      stopVisualizer();
+      stopMicCapture();
     };
   }, [currentCall?.status, callRole]);
 
@@ -817,62 +603,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Toggle Local Camera
-  const toggleVideo = async () => {
-    if (!localStreamRef.current) return;
-    const videoTracks = localStreamRef.current.getVideoTracks();
-    if (videoTracks.length > 0) {
-      const nextState = !videoTracks[0].enabled;
-      videoTracks.forEach(t => { t.enabled = nextState; });
-      setIsVideoEnabled(nextState);
-    } else {
-      try {
-        const camStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
-        });
-        const newVideoTrack = camStream.getVideoTracks()[0];
-        localStreamRef.current.addTrack(newVideoTrack);
-
-        if (peerConnectionRef.current) {
-          peerConnectionRef.current.addTrack(newVideoTrack, localStreamRef.current);
-          const offerDesc = await peerConnectionRef.current.createOffer();
-          await peerConnectionRef.current.setLocalDescription(offerDesc);
-          if (currentCall) {
-            await safeSetDoc(doc(db, 'active_calls', currentCall.id, 'webrtc', 'offer'), {
-              sdp: offerDesc.sdp,
-              type: offerDesc.type
-            });
-          }
-        }
-
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = localStreamRef.current;
-        }
-        setIsVideoEnabled(true);
-      } catch (err) {
-        console.warn("Camera request error:", err);
-        toast.error("Kameraga ulanib bo'lmadi");
-        setIsVideoEnabled(false);
-      }
-    }
-  };
-
-  // Sync video elements with streams
-  useEffect(() => {
-    if (localVideoRef.current && localStreamRef.current) {
-      if (localVideoRef.current.srcObject !== localStreamRef.current) {
-        localVideoRef.current.srcObject = localStreamRef.current;
-      }
-      localVideoRef.current.play().catch(() => {});
-    }
-    if (remoteVideoRef.current && remoteStreamRef.current) {
-      if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) {
-        remoteVideoRef.current.srcObject = remoteStreamRef.current;
-      }
-      remoteVideoRef.current.play().catch(() => {});
-    }
-  }, [currentCall?.status, isVideoEnabled, hasRemoteVideo, isMinimized]);
-
   // Start outgoing call
   const startCall = async ({
     chatId,
@@ -880,8 +610,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     receiverName,
     receiverId,
     receiverAvatar,
-    isSupport,
-    callType = 'audio'
+    isSupport
   }: {
     chatId: string;
     receiverEmail: string;
@@ -889,7 +618,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     receiverId?: string;
     receiverAvatar?: string;
     isSupport?: boolean;
-    callType?: 'audio' | 'video';
   }) => {
     if (!user) {
       toast.error("Qo'ng'iroq qilish uchun tizimga kiring");
@@ -901,7 +629,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const myEmail = user.email || '';
     const myPhoto = user.photoURL || '';
 
-    const isVideo = callType === 'video';
     const callDocId = `call_${chatId}_${Date.now()}`;
     const callData: ActiveCallData = {
       id: callDocId,
@@ -915,7 +642,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       receiverName: receiverName,
       receiverAvatar: receiverAvatar || '',
       status: 'ringing',
-      callType: callType,
       createdAt: new Date().toISOString(),
       answeredAt: null,
       endedAt: null,
@@ -931,8 +657,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await safeAddDoc(collection(db, 'notifications'), {
           userId: isSupport ? 'support_admin' : (receiverId || ''),
           userEmail: (receiverEmail || '').toLowerCase().trim(),
-          title: isVideo ? "📹 Kiruvchi Video Qo'ng'iroq" : "📞 Kiruvchi Ovozli Qo'ng'iroq",
-          message: `${myName} sizga ${isVideo ? 'video' : 'ovozli'} qo'ng'iroq qilmoqda...`,
+          title: "📞 Kiruvchi Ovozli Qo'ng'iroq",
+          message: `${myName} sizga ovozli qo'ng'iroq qilmoqda...`,
           chatId: chatId,
           type: 'call',
           callId: callDocId,
@@ -949,9 +675,9 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsMinimized(false);
       
       // Initialize WebRTC for caller
-      await initCallerWebRTC(callDocId, isVideo);
+      await initCallerWebRTC(callDocId);
 
-      toast.success(`${receiverName} bilan ${isVideo ? 'video' : 'ovozli'} qo'ng'iroq boshlandi...`);
+      toast.success(`${receiverName} bilan ovozli qo'ng'iroq boshlandi...`);
     } catch (e: any) {
       console.error("Call start error:", e);
       toast.error("Qo'ng'iroqni boshlashda xatolik yuz berdi");
@@ -970,11 +696,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       setCurrentCall(prev => prev ? { ...prev, status: 'connected' } : null);
 
-      const isVideo = currentCall.callType === 'video';
       // Initialize WebRTC for receiver
-      await initReceiverWebRTC(currentCall.id, isVideo);
+      await initReceiverWebRTC(currentCall.id);
 
-      toast.success(`${isVideo ? "Video" : "Ovozli"} qo'ng'iroqqa ulandingiz`);
+      toast.success("Ovozli qo'ng'iroqqa ulandingiz");
     } catch (e) {
       console.error("Accept call error:", e);
     }
@@ -991,8 +716,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         status: 'rejected',
         endedAt: new Date().toISOString()
       });
-      const isVideo = currentCall.callType === 'video';
-      await recordCallInChat(currentCall.chatId, isVideo ? "📹 Rad etilgan video qo'ng'iroq" : "📞 Rad etilgan ovozli qo'ng'iroq");
+      await recordCallInChat(currentCall.chatId, "📞 Rad etilgan ovozli qo'ng'iroq");
       setCurrentCall(null);
       setCallRole(null);
       toast.info("Qo'ng'iroq rad etildi");
@@ -1005,13 +729,12 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const endCall = async () => {
     if (!currentCall) return;
     stopAllTones();
-    stopVisualizer();
+    stopMicCapture();
     cleanupWebRTC();
 
     const wasConnected = currentCall.status === 'connected';
     const finalSecs = duration;
     const newStatus = wasConnected ? 'ended' : 'cancelled';
-    const isVideo = currentCall.callType === 'video';
 
     try {
       const callRef = doc(db, 'active_calls', currentCall.id);
@@ -1025,10 +748,10 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const mins = Math.floor(finalSecs / 60);
         const secs = finalSecs % 60;
         const durStr = `${mins > 0 ? `${mins} daq ` : ''}${secs} soniya`;
-        await recordCallInChat(currentCall.chatId, `${isVideo ? '📹 Video' : '📞 Ovozli'} qo'ng'iroq yakunlandi (${durStr})`);
+        await recordCallInChat(currentCall.chatId, `📞 Ovozli qo'ng'iroq yakunlandi (${durStr})`);
         toast.success(`Qo'ng'iroq yakunlandi (${durStr})`);
       } else if (!wasConnected) {
-        await recordCallInChat(currentCall.chatId, `${isVideo ? '📹' : '📞'} Bekor qilingan qo'ng'iroq`);
+        await recordCallInChat(currentCall.chatId, "📞 Bekor qilingan qo'ng'iroq");
         toast.info("Qo'ng'iroq bekor qilindi");
       }
 
@@ -1052,14 +775,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsMuted(nextMute);
   };
 
-  const toggleSpeaker = () => {
-    const nextSpeaker = !isSpeakerOn;
-    setIsSpeakerOn(nextSpeaker);
-    if (remoteAudioRef.current) {
-      remoteAudioRef.current.muted = !nextSpeaker;
-    }
-  };
-
   // Synchronize speaker mode with remote audio element
   useEffect(() => {
     if (remoteAudioRef.current) {
@@ -1079,31 +794,18 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
       : { name: currentCall.callerName, email: currentCall.callerEmail, avatar: currentCall.callerAvatar }
   ) : null;
 
-  const isVideoCall = currentCall?.callType === 'video' || isVideoEnabled;
-
   return (
     <CallContext.Provider value={{
       startCall,
       endCall,
       acceptCall,
       rejectCall,
-      toggleVideo,
-      toggleMute,
-      toggleSpeaker,
       currentCall,
       callRole,
-      isCallModalOpen: !!currentCall,
-      isVideoEnabled,
-      isMuted,
-      isSpeakerOn
+      isCallModalOpen: !!currentCall
     }}>
-      {/* Hidden audio element to play remote peer voice stream without browser throttling */}
-      <audio 
-        ref={remoteAudioRef} 
-        autoPlay 
-        playsInline 
-        className="opacity-0 pointer-events-none fixed -top-96 -left-96 w-1 h-1" 
-      />
+      {/* Hidden audio element to play remote peer voice stream */}
+      <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
 
       {children}
 
@@ -1117,8 +819,8 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
             
             {/* Header Badge */}
             <div className="flex items-center gap-2 text-xs font-bold text-cyan-400 bg-cyan-500/10 px-3.5 py-1.5 rounded-full border border-cyan-500/30 animate-pulse">
-              {currentCall.callType === 'video' ? <Video className="w-4 h-4" /> : <PhoneIncoming className="w-4 h-4" />}
-              <span>{currentCall.callType === 'video' ? "KIRUVCHI VIDEO QO'NG'IROQ" : "KIRUVCHI OVOZLI QO'NG'IROQ"}</span>
+              <PhoneIncoming className="w-4 h-4" />
+              <span>KIRUVCHI OVOZLI QO'NG'IROQ</span>
             </div>
 
             {/* Avatar with Sound Ripple Wave */}
@@ -1150,7 +852,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 {partnerInfo?.email || 'CloudBot Cloud Member'}
               </p>
               <p className="text-xs text-cyan-300 font-medium mt-3 animate-pulse">
-                Sizga {currentCall.callType === 'video' ? 'video' : 'ovozli'} qo'ng'iroq qilmoqda...
+                Sizga qo'ng'iroq qilmoqda...
               </p>
             </div>
 
@@ -1178,7 +880,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   style={{ animationDuration: '2s' }}
                   title="Javob berish"
                 >
-                  {currentCall.callType === 'video' ? <Video className="w-7 h-7" /> : <Phone className="w-7 h-7" />}
+                  <Phone className="w-7 h-7" />
                 </button>
                 <span className="text-[11px] font-semibold text-emerald-300">Javob berish</span>
               </div>
@@ -1210,8 +912,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
               <div className="min-w-0 pr-2">
                 <p className="text-xs font-bold text-white truncate max-w-[120px]">{partnerInfo?.name}</p>
-                <p className="text-[10px] font-mono text-cyan-300 flex items-center gap-1">
-                  {isVideoCall && <Video className="w-3 h-3 text-emerald-400" />}
+                <p className="text-[10px] font-mono text-cyan-300">
                   {currentCall.status === 'connected' ? formatTime(duration) : 'Gudok ketmoqda...'}
                 </p>
               </div>
@@ -1240,15 +941,13 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
               id="voice-call-overlay"
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-2xl p-4 animate-in fade-in duration-200"
             >
-              <div className={`relative w-full ${isVideoCall ? 'max-w-xl' : 'max-w-sm'} bg-gradient-to-b from-[#101426] via-[#0c0e1a] to-[#07080f] border border-cyan-500/40 rounded-3xl p-5 sm:p-7 shadow-[0_0_90px_rgba(6,182,212,0.18)] flex flex-col items-center justify-between min-h-[500px] overflow-hidden transition-all duration-300`}>
+              <div className="relative w-full max-w-sm bg-gradient-to-b from-[#101426] via-[#0c0e1a] to-[#07080f] border border-cyan-500/40 rounded-3xl p-6 sm:p-8 shadow-[0_0_90px_rgba(6,182,212,0.18)] flex flex-col items-center justify-between min-h-[480px] overflow-hidden">
                 
                 {/* Top Header */}
-                <div className="w-full flex items-center justify-between text-zinc-400 z-10">
+                <div className="w-full flex items-center justify-between text-zinc-400">
                   <div className="flex items-center gap-1.5 text-xs text-cyan-400 bg-cyan-500/10 px-2.5 py-1 rounded-full border border-cyan-500/30">
                     <Sparkles className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
-                    <span className="font-semibold tracking-wide">
-                      {isVideoCall ? 'HD Video Stream' : 'HD Voice Link'}
-                    </span>
+                    <span className="font-semibold tracking-wide">HD Voice Link</span>
                   </div>
 
                   <button
@@ -1261,144 +960,76 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   </button>
                 </div>
 
-                {/* Main Content Area */}
-                <div className="relative w-full my-auto flex flex-col items-center justify-center min-h-[320px]">
-                  
-                  {isVideoCall ? (
-                    /* VIDEO CALL STAGE */
-                    <div className="relative w-full h-72 sm:h-80 rounded-2xl overflow-hidden bg-slate-950 border border-cyan-500/30 shadow-2xl flex items-center justify-center">
-                      
-                      {/* Remote Video Stream Element - Always mounted in DOM during video call stage */}
-                      <video 
-                        ref={setRemoteVideoNode} 
-                        autoPlay 
-                        playsInline 
-                        className={`w-full h-full object-cover transition-opacity duration-300 ${hasRemoteVideo ? 'opacity-100' : 'opacity-0 absolute'}`} 
+                {/* Center: Avatar & Calling Info */}
+                <div className="flex flex-col items-center text-center my-auto w-full">
+                  <div className="relative mb-6">
+                    {currentCall.status === 'connected' ? (
+                      <div 
+                        className="absolute inset-0 rounded-full bg-cyan-500/20 animate-ping"
+                        style={{
+                          transform: `scale(${1 + audioLevel / 150})`,
+                          opacity: isMuted ? 0.1 : 0.4
+                        }}
                       />
-
-                      {/* Fallback Overlay when remote video stream is loading or inactive */}
-                      {!hasRemoteVideo && (
-                        <div className="flex flex-col items-center text-center p-4 z-10">
-                          <div className="w-20 h-20 rounded-full p-1 bg-gradient-to-tr from-cyan-500 via-teal-400 to-emerald-500 mb-3 shadow-[0_0_20px_rgba(6,182,212,0.3)]">
-                            {partnerInfo?.avatar ? (
-                              <img src={partnerInfo.avatar} alt={partnerInfo.name} className="w-full h-full rounded-full object-cover bg-slate-900" />
-                            ) : (
-                              <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-xl font-bold text-white">
-                                {partnerInfo?.name.charAt(0).toUpperCase()}
-                              </div>
-                            )}
-                          </div>
-                          <p className="text-sm font-bold text-white mb-1">{partnerInfo?.name}</p>
-                          <p className="text-xs text-cyan-300 font-medium animate-pulse flex items-center gap-1.5">
-                            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-                            {currentCall.status === 'ringing' 
-                              ? "Gudok ketmoqda..." 
-                              : "Suhbatdosh kamerasi yuklanmoqda..."}
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Remote Participant Name & Status Badge */}
-                      <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-md px-3 py-1 rounded-full text-xs text-white font-medium border border-white/10 flex items-center gap-2 z-10">
-                        <span className={`w-2 h-2 rounded-full ${hasRemoteVideo ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-                        <span>{partnerInfo?.name}</span>
-                      </div>
-
-                      {/* Floating Local Camera PiP Overlay (Top Right) */}
-                      <div className="absolute top-3 right-3 z-20 w-28 h-36 sm:w-32 sm:h-44 rounded-2xl overflow-hidden border-2 border-cyan-400/80 shadow-2xl bg-slate-900 flex items-center justify-center">
-                        <video 
-                          ref={setLocalVideoNode} 
-                          autoPlay 
-                          playsInline 
-                          muted 
-                          className={`w-full h-full object-cover transform -scale-x-100 ${isVideoEnabled ? 'block' : 'hidden'}`} 
+                    ) : (
+                      <div className="absolute inset-0 rounded-full bg-cyan-500/25 animate-ping" />
+                    )}
+                    
+                    <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full p-1 bg-gradient-to-tr from-cyan-500 via-teal-400 to-emerald-500 shadow-[0_0_30px_rgba(6,182,212,0.4)]">
+                      {partnerInfo?.avatar ? (
+                        <img 
+                          src={partnerInfo.avatar} 
+                          alt={partnerInfo.name} 
+                          className="w-full h-full rounded-full object-cover bg-slate-900 border-2 border-black" 
                         />
-                        {!isVideoEnabled && (
-                          <div className="flex flex-col items-center justify-center text-zinc-400 text-[10px] p-2 text-center bg-slate-900/90">
-                            <CameraOff className="w-5 h-5 mb-1 text-cyan-400/60" />
-                            <span>Kamera o'chiq</span>
-                          </div>
-                        )}
-                        <div className="absolute bottom-1.5 left-1.5 bg-black/70 backdrop-blur-md px-2 py-0.5 rounded-full text-[10px] text-white font-medium">
-                          Siz
-                        </div>
-                      </div>
-
-                    </div>
-                  ) : (
-                    /* AUDIO CALL AVATAR VIEW */
-                    <div className="flex flex-col items-center text-center my-auto w-full py-4">
-                      <div className="relative mb-6">
-                        {currentCall.status === 'connected' ? (
-                          <div 
-                            className="absolute inset-0 rounded-full bg-cyan-500/20 animate-ping"
-                            style={{
-                              transform: `scale(${1 + audioLevel / 150})`,
-                              opacity: isMuted ? 0.1 : 0.4
-                            }}
-                          />
-                        ) : (
-                          <div className="absolute inset-0 rounded-full bg-cyan-500/25 animate-ping" />
-                        )}
-                        
-                        <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-full p-1 bg-gradient-to-tr from-cyan-500 via-teal-400 to-emerald-500 shadow-[0_0_30px_rgba(6,182,212,0.4)]">
-                          {partnerInfo?.avatar ? (
-                            <img 
-                              src={partnerInfo.avatar} 
-                              alt={partnerInfo.name} 
-                              className="w-full h-full rounded-full object-cover bg-slate-900 border-2 border-black" 
-                            />
-                          ) : (
-                            <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-3xl font-black text-white border-2 border-black">
-                              {partnerInfo?.name.charAt(0).toUpperCase()}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <h3 className="text-xl font-black text-white tracking-tight mb-1">{partnerInfo?.name}</h3>
-                      <p className="text-xs text-zinc-400 font-mono mb-4">
-                        {partnerInfo?.email || 'CloudBot Cloud Member'}
-                      </p>
-
-                      {/* Call Status Badge */}
-                      <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/[0.05] border border-white/10 text-xs">
-                        {currentCall.status === 'ringing' && (
-                          <span className="text-teal-300 font-medium animate-pulse flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
-                            Gudok ketmoqda...
-                          </span>
-                        )}
-                        {currentCall.status === 'connected' && (
-                          <span className="text-emerald-400 font-mono font-bold flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                            {formatTime(duration)}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Live Audio Waveform visualizer when connected */}
-                      {currentCall.status === 'connected' && (
-                        <div className="flex items-center justify-center gap-1 mt-6 h-8">
-                          {[40, 70, 90, 60, 100, 75, 45, 85, 55, 95, 65, 35].map((h, i) => {
-                            const heightPercent = isMuted ? 15 : Math.max(15, Math.min(100, (audioLevel / 100) * h));
-                            return (
-                              <div
-                                key={i}
-                                className="w-1 rounded-full bg-gradient-to-t from-cyan-500 to-emerald-400 transition-all duration-75"
-                                style={{ height: `${heightPercent}%` }}
-                              />
-                            );
-                          })}
+                      ) : (
+                        <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center text-3xl font-black text-white border-2 border-black">
+                          {partnerInfo?.name.charAt(0).toUpperCase()}
                         </div>
                       )}
+                    </div>
+                  </div>
+
+                  <h3 className="text-xl font-black text-white tracking-tight mb-1">{partnerInfo?.name}</h3>
+                  <p className="text-xs text-zinc-400 font-mono mb-4">
+                    {partnerInfo?.email || 'CloudBot Cloud Member'}
+                  </p>
+
+                  {/* Call Status Badge */}
+                  <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/[0.05] border border-white/10 text-xs">
+                    {currentCall.status === 'ringing' && (
+                      <span className="text-teal-300 font-medium animate-pulse flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
+                        Gudok ketmoqda...
+                      </span>
+                    )}
+                    {currentCall.status === 'connected' && (
+                      <span className="text-emerald-400 font-mono font-bold flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                        {formatTime(duration)}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Live Audio Waveform visualizer when connected */}
+                  {currentCall.status === 'connected' && (
+                    <div className="flex items-center justify-center gap-1 mt-6 h-8">
+                      {[40, 70, 90, 60, 100, 75, 45, 85, 55, 95, 65, 35].map((h, i) => {
+                        const heightPercent = isMuted ? 15 : Math.max(15, Math.min(100, (audioLevel / 100) * h));
+                        return (
+                          <div
+                            key={i}
+                            className="w-1 rounded-full bg-gradient-to-t from-cyan-500 to-emerald-400 transition-all duration-75"
+                            style={{ height: `${heightPercent}%` }}
+                          />
+                        );
+                      })}
                     </div>
                   )}
-
                 </div>
 
                 {/* Action Controls Bar */}
-                <div className="w-full flex items-center justify-around pt-4 border-t border-white/[0.08] mt-4 z-10">
+                <div className="w-full flex items-center justify-around pt-4 border-t border-white/[0.08] mt-4">
                   {/* Mute Mic */}
                   <button
                     type="button"
@@ -1414,21 +1045,6 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
                   </button>
 
-                  {/* Toggle Video Camera */}
-                  <button
-                    type="button"
-                    onClick={toggleVideo}
-                    disabled={currentCall.status !== 'connected'}
-                    className={`p-3.5 rounded-2xl transition-all cursor-pointer ${
-                      isVideoEnabled 
-                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' 
-                        : 'bg-white/10 text-white hover:bg-white/20 border border-white/10'
-                    } disabled:opacity-40 disabled:cursor-not-allowed`}
-                    title={isVideoEnabled ? "Kamerani o'chirish" : "Kamerani yoqish"}
-                  >
-                    {isVideoEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
-                  </button>
-
                   {/* End Call Button */}
                   <button
                     type="button"
@@ -1442,7 +1058,7 @@ export const CallProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   {/* Speaker Button */}
                   <button
                     type="button"
-                    onClick={toggleSpeaker}
+                    onClick={() => setIsSpeakerOn(prev => !prev)}
                     className={`p-3.5 rounded-2xl transition-all cursor-pointer ${
                       !isSpeakerOn 
                         ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40' 
