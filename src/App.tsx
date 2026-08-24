@@ -6,6 +6,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { CallProvider } from './context/CallContext';
 import { Navbar } from './components/Navbar';
 import { Landing } from './pages/Landing';
 import { Dashboard } from './pages/Dashboard';
@@ -56,9 +57,11 @@ function AppLayout() {
 export default function App() {
   return (
     <AuthProvider>
-      <Router>
-        <AppLayout />
-      </Router>
+      <CallProvider>
+        <Router>
+          <AppLayout />
+        </Router>
+      </CallProvider>
     </AuthProvider>
   );
 }

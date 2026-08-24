@@ -15,7 +15,7 @@ import { toast } from 'sonner';
 import { LogoIcon } from '../components/Logo';
 import feedbackAvatarImg from '../assets/images/feedback_avatar_1786443979118.jpg';
 import { extractUrls, FormattedMessageText, RichLinkPreviewCard } from '../components/RichLinkPreview';
-import { VoiceCallModal } from '../components/VoiceCallModal';
+import { useCall } from '../context/CallContext';
 
 interface MessageReply {
   sender: 'admin' | 'user';
@@ -116,6 +116,7 @@ function formatFileSize(bytes: number): string {
 
 export const Messages: React.FC = () => {
   const { user, isAdmin } = useAuth();
+  const { startCall } = useCall();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialChatId = searchParams.get('chatId');
 
@@ -147,9 +148,6 @@ export const Messages: React.FC = () => {
   // Reaction picker state
   const [activeReactionPicker, setActiveReactionPicker] = useState<{ type: 'initial' | 'reply', replyIndex?: number } | null>(null);
   const [showInputEmojiPicker, setShowInputEmojiPicker] = useState<boolean>(false);
-
-  // Voice call state
-  const [isVoiceCallActive, setIsVoiceCallActive] = useState<boolean>(false);
 
   // Filter tabs: 'all' | 'unread'
   const [activeTab, setActiveTab] = useState<'all' | 'unread'>('all');
@@ -863,40 +861,35 @@ export const Messages: React.FC = () => {
     );
   };
 
-  const handleVoiceCallEnd = async (durationSeconds: number) => {
-    setIsVoiceCallActive(false);
-    if (!activeMsg || !user) return;
-
-    if (durationSeconds > 0) {
-      const mins = Math.floor(durationSeconds / 60);
-      const secs = durationSeconds % 60;
-      const durStr = `${mins > 0 ? `${mins} daq ` : ''}${secs} soniya`;
-      toast.success(`Ovozli qo'ng'iroq yakunlandi (${durStr})`);
-
-      try {
-        const msgRef = doc(db, 'contact_messages', activeMsg.id);
-        const existingReplies = activeMsg.replies || [];
-        const callLogReply: MessageReply = {
-          sender: isAdmin ? 'admin' : 'user',
-          senderId: user.uid,
-          senderEmail: user.email || '',
-          text: `📞 Ovozli qo'ng'iroq yakunlandi (${durStr})`,
-          createdAt: new Date().toISOString(),
-          senderName: user.displayName || user.email?.split('@')[0] || (isAdmin ? 'Admin' : 'Foydalanuvchi')
-        };
-
-        const updateData: any = {
-          replies: [...existingReplies, callLogReply],
-          updatedAt: new Date().toISOString()
-        };
-
-        await safeUpdateDoc(msgRef, updateData);
-      } catch (e) {
-        console.warn("Call log save error:", e);
-      }
+  const handleInitiateCall = (m: ContactMessage) => {
+    if (!m || !user) return;
+    const partner = getChatPartner(m);
+    
+    // Determine the exact receiver UID and Email
+    let receiverUid = '';
+    if (partner.isSupport) {
+      receiverUid = 'support_admin';
     } else {
-      toast.info("Qo'ng'iroq bekor qilindi");
+      if (m.userId !== user.uid && m.userId) {
+        receiverUid = m.userId;
+      } else if (m.targetUserId) {
+        receiverUid = m.targetUserId;
+      }
+
+      if (!receiverUid && partner.email) {
+        const targetProf = allProfiles.find(p => p.email?.toLowerCase().trim() === partner.email?.toLowerCase().trim());
+        if (targetProf) receiverUid = targetProf.id;
+      }
     }
+
+    startCall({
+      chatId: m.id,
+      receiverEmail: partner.email || '',
+      receiverName: partner.name || 'Foydalanuvchi',
+      receiverId: receiverUid,
+      receiverAvatar: partner.photoURL,
+      isSupport: partner.isSupport
+    });
   };
 
   const confirmDeleteSingle = async () => {
@@ -1226,7 +1219,7 @@ export const Messages: React.FC = () => {
 
               <div className="flex items-center gap-1.5">
                 <button 
-                  onClick={() => setIsVoiceCallActive(true)}
+                  onClick={() => handleInitiateCall(activeMsg)}
                   className="p-2.5 rounded-xl hover:bg-cyan-500/20 text-zinc-400 hover:text-cyan-300 transition-colors border border-transparent hover:border-cyan-500/30 cursor-pointer" 
                   title="Ovozli qo'ng'iroq qilish"
                 >
@@ -1805,18 +1798,6 @@ export const Messages: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Voice Call Modal */}
-      {activeMsg && (
-        <VoiceCallModal
-          isOpen={isVoiceCallActive}
-          partnerName={getChatPartner(activeMsg).name}
-          partnerAvatar={getChatPartner(activeMsg).photoURL}
-          partnerEmail={getChatPartner(activeMsg).email}
-          isSupport={getChatPartner(activeMsg).isSupport}
-          onClose={handleVoiceCallEnd}
-        />
       )}
 
     </div>

@@ -170,13 +170,22 @@ async def handle_admin_inputs(update: Update, context: ContextTypes.DEFAULT_TYPE
         del user_states[user_id]
         await update.message.reply_text(f"✅ Rasm qo'shildi!\nBuyruq: /{code}\nNomi: {title}")
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logging.warning(f"Telegram Bot Update notice: {context.error}")
+
+# CloudBot Auto-injected Global Error Handler
+async def _cloudbot_error_handler(update, context):
+    if not context.error:
+        return
+    err_str = str(context.error)
+    err_type = type(context.error).__name__
+    transient = ('httpx.ReadError', 'httpx.ConnectError', 'httpx.RemoteProtocolError', 'httpx.ReadTimeout', 'httpx.ConnectTimeout', 'httpx.TimeoutException', 'ReadError', 'ConnectError', 'RemoteProtocolError', 'ReadTimeout', 'ConnectTimeout', 'TimeoutException', 'TimedOut', 'NetworkError', 'RetryAfter')
+    if any(t in err_str or t in err_type for t in transient):
+        return
+    import logging
+    logging.warning(f"Bot handler notice: {context.error}")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_error_handler(error_handler)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(callback_handler))
@@ -186,6 +195,7 @@ def main():
     app.add_handler(MessageHandler(filters.COMMAND, handle_commands))
 
     print("Bot ishga tushdi...")
+    app.add_error_handler(_cloudbot_error_handler)
     app.run_polling()
 
 if __name__ == "__main__":

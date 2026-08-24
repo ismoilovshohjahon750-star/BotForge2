@@ -93,6 +93,22 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "createdAt"]
+    },
+    "ActiveCall": {
+      "title": "ActiveCall",
+      "description": "Ovozli qo'ng'iroqlar holati va signallari",
+      "type": "object",
+      "properties": {
+        "chatId": { "type": "string" },
+        "callerId": { "type": "string" },
+        "callerName": { "type": "string" },
+        "callerEmail": { "type": "string" },
+        "receiverId": { "type": "string" },
+        "receiverEmail": { "type": "string" },
+        "status": { "type": "string", "enum": ["ringing", "connected", "rejected", "ended", "missed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["callerId", "receiverEmail", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -127,6 +143,10 @@
     "/chat_history/{chatId}": {
       "schema": "ChatHistory",
       "description": "Botly AI suhbatlari tarixi"
+    },
+    "/active_calls/{callId}": {
+      "schema": "ActiveCall",
+      "description": "Real-vaqtda ovozli qo'ng'iroqlar ma'lumotlari"
     }
   }
 }

@@ -64,6 +64,14 @@ service cloud.firestore {
     match /chat_history/{chatId} {
       allow read, write: if isSignedIn();
     }
+
+    // Active Calls (Voice Calls & Signals)
+    match /active_calls/{callId} {
+      allow read, write: if isSignedIn();
+    }
+    match /active_calls/{callId}/{allPaths=**} {
+      allow read, write: if isSignedIn();
+    }
   }
 }
 

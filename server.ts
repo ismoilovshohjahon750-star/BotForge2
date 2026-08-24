@@ -382,7 +382,7 @@ function autoRepairPythonFiles(botDir: string, pyFiles: string[]) {
       // 3. Inject error handler for python-telegram-bot (ApplicationBuilder / run_polling) if missing
       if (content.includes('ApplicationBuilder') || content.includes('telegram.ext') || content.includes('run_polling')) {
         if (!content.includes('add_error_handler') && !content.includes('_cloudbot_error_handler')) {
-          const handlerDef = `\n# CloudBot Auto-injected Global Error Handler\nasync def _cloudbot_error_handler(update, context):\n    import logging\n    if context.error:\n        logging.warning(f"Telegram polling notice: {context.error}")\n`;
+          const handlerDef = `\n# CloudBot Auto-injected Global Error Handler\nasync def _cloudbot_error_handler(update, context):\n    if not context.error:\n        return\n    err_str = str(context.error)\n    err_type = type(context.error).__name__\n    transient = ('httpx.ReadError', 'httpx.ConnectError', 'httpx.RemoteProtocolError', 'httpx.ReadTimeout', 'httpx.ConnectTimeout', 'httpx.TimeoutException', 'ReadError', 'ConnectError', 'RemoteProtocolError', 'ReadTimeout', 'ConnectTimeout', 'TimeoutException', 'TimedOut', 'NetworkError', 'RetryAfter')\n    if any(t in err_str or t in err_type for t in transient):\n        return\n    import logging\n    logging.warning(f"Bot handler notice: {context.error}")\n`;
           if (content.includes('def main():') || content.includes('def main(')) {
             content = content.replace(/(def main\(.*?\):)/, `${handlerDef}\n$1`);
           } else {
@@ -1080,9 +1080,24 @@ async function startBot(botId: string) {
                 if (line.includes('WARNING: Running pip as the') || line.includes('Requirement already satisfied')) continue;
                 if (line.trim() === 'raise exception' || line.trim() === 'raise exc') continue;
 
+                // Filter out transient Telegram long-polling network reconnects & notices
+                if (
+                    line.includes('Telegram polling notice:') ||
+                    line.includes('httpx.ReadError') ||
+                    line.includes('httpx.ConnectError') ||
+                    line.includes('httpx.RemoteProtocolError') ||
+                    line.includes('httpx.ReadTimeout') ||
+                    line.includes('httpx.ConnectTimeout') ||
+                    line.includes('httpx.TimeoutException') ||
+                    line.includes('telegram.error.TimedOut') ||
+                    line.includes('telegram.error.NetworkError') ||
+                    line.includes('telegram.error.RetryAfter')
+                ) {
+                    continue;
+                }
+
                 // Check for Telegram Application error handler warning
                 if (line.includes('No error handlers are registered, logging exception')) {
-                    addBotLog(botId, 'run', `⚠️ Telegram Bot: Tarmoq uzilishi yoki ulanishda xatolik yuz berdi (Auto-reconnecting...).`);
                     continue;
                 }
 
