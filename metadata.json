@@ -1,7 +1,9 @@
 {
   "name": "Remix Remix BotForge111111",
   "description": "Telegram va Discord botlarini 24/7 bulutli hostingda ishga tushiruvchi SaaS platforma.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "microphone"
+  ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]

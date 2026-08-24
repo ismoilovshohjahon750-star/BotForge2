@@ -17,100 +17,126 @@ export const LogoIcon: React.FC<LogoProps> = ({ size = 32, className = '' }) => 
     >
       <defs>
         {/* Glow Filters */}
-        <filter id="cb-glow" x="-30%" y="-30%" width="160%" height="160%">
-          <feGaussianBlur stdDeviation="2.5" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <filter id="cb-deep-glow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="6" result="blur" />
+        <filter id="cb-glow-soft" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="2" result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
 
-        {/* Main Neon Gradients */}
-        <linearGradient id="cb-grad-cloud" x1="12" y1="18" x2="88" y2="84" gradientUnits="userSpaceOnUse">
+        <filter id="cb-glow-strong" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur stdDeviation="4" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+
+        {/* Outer Squircle Rim Gradient */}
+        <linearGradient id="cb-rim-grad" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#10b981" />
-          <stop offset="45%" stopColor="#00f2fe" />
-          <stop offset="100%" stopColor="#3b82f6" />
+          <stop offset="40%" stopColor="#06b6d4" />
+          <stop offset="75%" stopColor="#3b82f6" />
+          <stop offset="100%" stopColor="#8b5cf6" />
         </linearGradient>
 
-        <linearGradient id="cb-grad-bg" x1="0" y1="0" x2="100" y2="100" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#0d172e" />
-          <stop offset="100%" stopColor="#050a14" />
+        {/* Squircle Glass Background */}
+        <linearGradient id="cb-bg-grad" x1="50" y1="0" x2="50" y2="100" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#0b172a" />
+          <stop offset="50%" stopColor="#060c18" />
+          <stop offset="100%" stopColor="#02050c" />
         </linearGradient>
 
-        <linearGradient id="cb-grad-glow" x1="20" y1="20" x2="80" y2="80" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#34d399" stopOpacity="0.4" />
-          <stop offset="60%" stopColor="#00f2fe" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.08" />
+        {/* Cloud Body Premium Radiant Gradient */}
+        <linearGradient id="cb-cloud-grad" x1="15" y1="20" x2="85" y2="75" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#34d399" />
+          <stop offset="35%" stopColor="#00f2fe" />
+          <stop offset="70%" stopColor="#0284c7" />
+          <stop offset="100%" stopColor="#4f46e5" />
         </linearGradient>
 
-        <linearGradient id="cb-grad-visor" x1="30" y1="40" x2="70" y2="70" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#061124" />
-          <stop offset="100%" stopColor="#020712" />
+        {/* Visor Glass Gradient */}
+        <linearGradient id="cb-visor-grad" x1="50" y1="42" x2="50" y2="66" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#030712" />
+          <stop offset="100%" stopColor="#091427" />
         </linearGradient>
+
+        {/* Radial Ambient Core Light */}
+        <radialGradient id="cb-core-glow" cx="50" cy="52" r="30" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#00f2fe" stopOpacity="0.4" />
+          <stop offset="50%" stopColor="#10b981" stopOpacity="0.15" />
+          <stop offset="100%" stopColor="#020617" stopOpacity="0" />
+        </radialGradient>
       </defs>
 
-      {/* Cyber Squircle Badge Backplate with Neon Gradient Rim */}
+      {/* 1. Squircle Backplate with Micro-Border */}
       <rect
-        x="3"
-        y="3"
-        width="94"
-        height="94"
-        rx="24"
-        fill="url(#cb-grad-bg)"
-        stroke="url(#cb-grad-cloud)"
-        strokeWidth="2.5"
+        x="3.5"
+        y="3.5"
+        width="93"
+        height="93"
+        rx="26"
+        fill="url(#cb-bg-grad)"
+        stroke="url(#cb-rim-grad)"
+        strokeWidth="2.2"
       />
 
-      {/* Ambient Internal Glow */}
-      <circle cx="50" cy="52" r="28" fill="url(#cb-grad-glow)" filter="url(#cb-deep-glow)" />
+      {/* 2. Ambient Internal Holographic Illumination */}
+      <circle cx="50" cy="52" r="32" fill="url(#cb-core-glow)" filter="url(#cb-glow-strong)" />
 
-      {/* Top Antenna / Signal Transmitter */}
-      <path d="M50 26 L50 14" stroke="url(#cb-grad-cloud)" strokeWidth="3.5" strokeLinecap="round" />
-      <circle cx="50" cy="13" r="4.5" fill="#00f2fe" filter="url(#cb-glow)" />
-      <circle cx="50" cy="13" r="2" fill="#ffffff" />
-      <path d="M39 10 A 13 13 0 0 1 61 10" stroke="#34d399" strokeWidth="2.2" strokeLinecap="round" opacity="0.85" />
+      {/* 3. Sleek Top Antenna & Signal Beacon */}
+      <path d="M50 25 L50 14" stroke="url(#cb-cloud-grad)" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="50" cy="12.5" r="4.5" fill="#00f2fe" filter="url(#cb-glow-soft)" />
+      <circle cx="50" cy="12.5" r="2" fill="#ffffff" />
+      
+      {/* Top Radio Pulse Waves */}
+      <path d="M40 8.5 A 14 14 0 0 1 60 8.5" stroke="#34d399" strokeWidth="2" strokeLinecap="round" opacity="0.8" />
+      <path d="M34 5.5 A 22 22 0 0 1 66 5.5" stroke="#00f2fe" strokeWidth="1.5" strokeLinecap="round" opacity="0.45" />
 
-      {/* Main Cloud Outer Contour */}
+      {/* 4. Aerodynamic Futuristic Cloud Shape (Main Shell) */}
       <path
-        d="M26 68 C16 68 11 58 15 48 C18 39 26 36 34 35 C38 23 50 18 63 22 C72 25 78 33 80 41 C89 42 93 50 91 59 C89 67 82 68 74 68 Z"
-        fill="url(#cb-grad-cloud)"
-        filter="url(#cb-glow)"
+        d="M26 67 C16.5 67 11.5 57.5 15.5 48 C18.5 40 26 36.5 33.5 35.5 C37 24 49 19 61.5 22.5 C70.5 25 76.5 32.5 78.5 40.5 C87 41.5 91 49.5 89 58 C87.2 65.5 80.5 67 73.5 67 Z"
+        fill="url(#cb-cloud-grad)"
+        filter="url(#cb-glow-soft)"
       />
 
-      {/* Bot Screen Visor (Cutout Dark Cyber Glass) */}
+      {/* 5. Cyber Visor (Precision Cutout Curved Screen) */}
       <rect
-        x="27"
+        x="26"
         y="42"
-        width="46"
+        width="48"
         height="22"
-        rx="7"
-        fill="url(#cb-grad-visor)"
+        rx="8"
+        fill="url(#cb-visor-grad)"
         stroke="#00f2fe"
-        strokeWidth="1.8"
+        strokeWidth="1.6"
       />
 
-      {/* Glowing Cyan/Emerald LED Eyes */}
-      <rect x="34.5" y="47.5" width="9" height="10" rx="3" fill="#00f2fe" filter="url(#cb-glow)" />
-      <rect x="36.5" y="49" width="4.5" height="5" rx="1.5" fill="#ffffff" />
+      {/* 6. High-Luminance Cybernetic Optic Eyes */}
+      {/* Left Eye */}
+      <g filter="url(#cb-glow-soft)">
+        <rect x="33.5" y="47.5" width="9.5" height="11" rx="3.5" fill="#00f2fe" />
+        <rect x="35.5" y="49" width="4.5" height="5" rx="1.5" fill="#ffffff" />
+      </g>
 
-      <rect x="56.5" y="47.5" width="9" height="10" rx="3" fill="#00f2fe" filter="url(#cb-glow)" />
-      <rect x="58.5" y="49" width="4.5" height="5" rx="1.5" fill="#ffffff" />
+      {/* Right Eye */}
+      <g filter="url(#cb-glow-soft)">
+        <rect x="57" y="47.5" width="9.5" height="11" rx="3.5" fill="#00f2fe" />
+        <rect x="59" y="49" width="4.5" height="5" rx="1.5" fill="#ffffff" />
+      </g>
 
-      {/* Friendly Voice Pulse */}
-      <path d="M46 60 Q50 63 54 60" stroke="#34d399" strokeWidth="2" strokeLinecap="round" />
+      {/* 7. Friendly Cyber Wave / Smile Indicator */}
+      <path d="M46.5 59.5 Q50 62.5 53.5 59.5" stroke="#34d399" strokeWidth="2.2" strokeLinecap="round" />
 
-      {/* Cloud Server / Hosting Connection Pulse Line at the bottom */}
-      <path d="M37 77 Q50 83 63 77" stroke="url(#cb-grad-cloud)" strokeWidth="2.5" strokeLinecap="round" opacity="0.9" />
-      <circle cx="50" cy="86" r="3" fill="#00f2fe" filter="url(#cb-glow)" />
-      <circle cx="37" cy="84" r="2" fill="#10b981" opacity="0.9" />
-      <circle cx="63" cy="84" r="2" fill="#3b82f6" opacity="0.9" />
+      {/* 8. Cloud Server Uplink & Data Bus Nodes at Bottom */}
+      <path d="M35 77 Q50 83 65 77" stroke="url(#cb-cloud-grad)" strokeWidth="2.2" strokeLinecap="round" opacity="0.85" />
+      <g filter="url(#cb-glow-soft)">
+        <circle cx="34" cy="85" r="2.5" fill="#10b981" />
+        <circle cx="50" cy="87.5" r="3.5" fill="#00f2fe" />
+        <circle cx="66" cy="85" r="2.5" fill="#6366f1" />
+      </g>
+      <circle cx="50" cy="87.5" r="1.5" fill="#ffffff" />
     </svg>
   );
 };
@@ -125,12 +151,12 @@ export const LogoFull: React.FC<LogoProps & { showSub?: boolean; vertical?: bool
     return (
       <div className={`flex flex-col items-center text-center ${className}`}>
         <LogoIcon size={size * 1.3} />
-        <div className="mt-2">
-          <h1 className="text-2xl font-black text-white tracking-wider uppercase leading-none font-sans">
-            CLOUD<span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-cyan-400 to-[#00f2fe]">BOT</span>
+        <div className="mt-2.5">
+          <h1 className="text-2xl font-black text-white tracking-wider uppercase leading-none font-sans flex items-center justify-center gap-0.5">
+            CLOUD<span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-cyan-300 to-blue-400">BOT</span>
           </h1>
           {showSub && (
-            <p className="text-[10px] text-zinc-400 tracking-widest uppercase mt-1 font-mono">
+            <p className="text-[10px] text-cyan-400/80 tracking-widest uppercase mt-1 font-mono font-medium">
               24/7 Cloud Hosting
             </p>
           )}
@@ -143,11 +169,11 @@ export const LogoFull: React.FC<LogoProps & { showSub?: boolean; vertical?: bool
     <div className={`flex items-center gap-2.5 ${className}`}>
       <LogoIcon size={size} />
       <div className="flex flex-col">
-        <h1 className="text-xl font-black text-white tracking-wider uppercase leading-none font-sans">
-          CLOUD<span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-cyan-400 to-[#00f2fe]">BOT</span>
+        <h1 className="text-xl font-black text-white tracking-wider uppercase leading-none font-sans flex items-center gap-0.5">
+          CLOUD<span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-cyan-300 to-blue-400">BOT</span>
         </h1>
         {showSub && (
-          <p className="text-[9.5px] text-zinc-400 tracking-widest uppercase mt-1 font-mono">
+          <p className="text-[9.5px] text-cyan-400/80 tracking-widest uppercase mt-1 font-mono font-medium">
             24/7 Cloud Hosting
           </p>
         )}
