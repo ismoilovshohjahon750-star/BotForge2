@@ -277,11 +277,33 @@ function isLocalPythonModule(botDir: string, modName: string): boolean {
 
 function autoDetectPythonDependencies(botDir: string, pyFiles: string[]): string[] {
   const detected = new Set<string>();
+  let hasAiogram2 = false;
+  let hasPtb13 = false;
+
   for (const pyFile of pyFiles) {
     try {
       const fullPath = path.join(botDir, pyFile);
       if (!fs.existsSync(fullPath)) continue;
       const content = fs.readFileSync(fullPath, 'utf8');
+
+      // Check for aiogram 2.x syntax (Claude AI / legacy bots)
+      if (
+        content.includes('from aiogram.utils import executor') ||
+        content.includes('executor.start_polling') ||
+        content.includes('from aiogram import executor') ||
+        content.includes('from aiogram.dispatcher.filters import Text')
+      ) {
+        hasAiogram2 = true;
+      }
+
+      // Check for python-telegram-bot v13 syntax
+      if (
+        content.includes('from telegram.ext import Updater') ||
+        content.includes('Updater(')
+      ) {
+        hasPtb13 = true;
+      }
+
       const lines = content.split('\n');
       for (const line of lines) {
         // Strip comments and trailing spaces
@@ -311,7 +333,106 @@ function autoDetectPythonDependencies(botDir: string, pyFiles: string[]): string
       }
     } catch (e) {}
   }
-  return Array.from(detected);
+
+  const result: string[] = [];
+  for (const pkg of detected) {
+    if (pkg === 'aiogram') {
+      result.push(hasAiogram2 ? 'aiogram<3.0.0,>=2.25.1' : 'aiogram');
+    } else if (pkg === 'python-telegram-bot') {
+      result.push(hasPtb13 ? 'python-telegram-bot<20.0,>=13.15' : 'python-telegram-bot');
+    } else if (pkg === 'telebot') {
+      result.push('pyTelegramBotAPI');
+    } else {
+      result.push(pkg);
+    }
+  }
+
+  return result;
+}
+
+function autoDetectNodeDependencies(botDir: string, jsFiles: string[]): { dependencies: Record<string, string>; hasEsm: boolean } {
+  const nodeStdLib = new Set([
+    'fs', 'fs/promises', 'path', 'http', 'https', 'crypto', 'os', 'events', 
+    'child_process', 'util', 'stream', 'url', 'querystring', 'zlib', 'net', 
+    'tls', 'cluster', 'buffer', 'worker_threads', 'readline', 'dns', 'constants', 
+    'vm', 'v8', 'perf_hooks', 'async_hooks', 'string_decoder', 'timers', 'tty'
+  ]);
+
+  const knownNodeMap: Record<string, string> = {
+    'telegraf': '^4.16.3',
+    'node-telegram-bot-api': '^0.66.0',
+    'grammy': '^1.35.0',
+    '@grammyjs/runner': '^2.0.3',
+    '@grammyjs/conversations': '^1.2.0',
+    '@grammyjs/menu': '^1.2.1',
+    'dotenv': '^16.4.7',
+    'axios': '^1.7.9',
+    'node-fetch': '^2.7.0',
+    'express': '^4.21.2',
+    'cors': '^2.8.5',
+    'ws': '^8.18.0',
+    'moment': '^2.30.1',
+    'dayjs': '^1.11.13',
+    'lodash': '^4.17.21',
+    'better-sqlite3': '^11.8.1',
+    'sqlite3': '^5.1.7',
+    'pg': '^8.13.1',
+    'mysql2': '^3.12.0',
+    'mongoose': '^8.10.0',
+    'openai': '^4.85.0',
+    '@google/genai': '^0.1.2',
+    '@google/generative-ai': '^0.22.0',
+    'node-cron': '^3.0.3'
+  };
+
+  const detected: Record<string, string> = {};
+  let hasEsm = false;
+
+  for (const jsFile of jsFiles) {
+    try {
+      const fullPath = path.join(botDir, jsFile);
+      if (!fs.existsSync(fullPath)) continue;
+      const content = fs.readFileSync(fullPath, 'utf8');
+
+      if (/^\s*import\s+(?:(?:\w+|\{[^}]*\}|\*\s+as\s+\w+)\s+from\s+)?['"][^'"]+['"]/m.test(content) || /^\s*export\s+/m.test(content)) {
+        hasEsm = true;
+      }
+
+      // 1. require('package')
+      const requireMatches = content.matchAll(/require\s*\(\s*['"]([@a-zA-Z0-9_\-\./]+)['"]\s*\)/g);
+      for (const m of requireMatches) {
+        let pkg = m[1].trim();
+        if (pkg.startsWith('.') || pkg.startsWith('/')) continue;
+        if (pkg.startsWith('@')) {
+          const parts = pkg.split('/');
+          pkg = parts.slice(0, 2).join('/');
+        } else {
+          pkg = pkg.split('/')[0];
+        }
+        if (pkg && !nodeStdLib.has(pkg)) {
+          detected[pkg] = knownNodeMap[pkg] || 'latest';
+        }
+      }
+
+      // 2. import ... from 'package'
+      const importMatches = content.matchAll(/(?:from|import)\s+['"]([@a-zA-Z0-9_\-\./]+)['"]/g);
+      for (const m of importMatches) {
+        let pkg = m[1].trim();
+        if (pkg.startsWith('.') || pkg.startsWith('/')) continue;
+        if (pkg.startsWith('@')) {
+          const parts = pkg.split('/');
+          pkg = parts.slice(0, 2).join('/');
+        } else {
+          pkg = pkg.split('/')[0];
+        }
+        if (pkg && !nodeStdLib.has(pkg)) {
+          detected[pkg] = knownNodeMap[pkg] || 'latest';
+        }
+      }
+    } catch (e) {}
+  }
+
+  return { dependencies: detected, hasEsm };
 }
 
 function sanitizeRequirementsTxt(botDir: string, reqPath: string): string[] {
@@ -323,8 +444,14 @@ function sanitizeRequirementsTxt(botDir: string, reqPath: string): string[] {
     const seen = new Set<string>();
 
     for (const rawLine of lines) {
-      const line = rawLine.trim();
+      let line = rawLine.trim();
       if (!line || line.startsWith('#')) continue;
+      
+      // Fix telebot -> pyTelegramBotAPI
+      if (line.toLowerCase() === 'telebot' || line.toLowerCase().startsWith('telebot==') || line.toLowerCase().startsWith('telebot>=')) {
+        line = 'pyTelegramBotAPI';
+      }
+
       const pkgName = line.split(/[=<>!~;@\s]/)[0].trim();
       if (!pkgName) continue;
       if (isLocalPythonModule(botDir, pkgName)) {
@@ -946,16 +1073,53 @@ async function startBot(botId: string) {
                 }
             }
         }
-    } else if (activeLanguage === 'nodejs' || hasPackageJson) {
+    } else if (activeLanguage === 'nodejs' || hasPackageJson || jsFiles.length > 0) {
         const pkgPath = path.join(botDir, 'package.json');
+        const nodeAnalysis = autoDetectNodeDependencies(botDir, jsFiles);
+
+        let pkgJson: any = {
+            name: "cloudbot-telegram-bot",
+            version: "1.0.0",
+            description: "Telegram Bot hosted on CloudBot",
+            main: activeEntryPoint || "index.js",
+            dependencies: {}
+        };
+
         if (fs.existsSync(pkgPath)) {
-            addBotLog(botId, 'deploy', `📦 Node.js modullari o'rnatilmoqda (npm install)...`);
+            try {
+                pkgJson = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                if (!pkgJson.dependencies) pkgJson.dependencies = {};
+            } catch (e) {}
+        }
+
+        // Merge auto-detected dependencies
+        let addedCount = 0;
+        for (const [dep, ver] of Object.entries(nodeAnalysis.dependencies)) {
+            if (!pkgJson.dependencies[dep]) {
+                pkgJson.dependencies[dep] = ver;
+                addedCount++;
+            }
+        }
+
+        if (nodeAnalysis.hasEsm && !pkgJson.type) {
+            pkgJson.type = "module";
+        }
+
+        try {
+            fs.writeFileSync(pkgPath, JSON.stringify(pkgJson, null, 2), 'utf8');
+        } catch (e) {}
+
+        const depsList = Object.keys(pkgJson.dependencies || {});
+        if (depsList.length > 0) {
+            addBotLog(botId, 'deploy', `📦 Node.js modullari o'rnatilmoqda (${depsList.join(', ')})...`);
             try {
                 execSync('npm install --no-audit --no-fund', { cwd: botDir, stdio: 'ignore', timeout: 120000, env: childEnv });
                 addBotLog(botId, 'deploy', `✅ Node.js modullari muvaffaqiyatli o'rnatildi.`);
             } catch (npmErr: any) {
                 addBotLog(botId, 'deploy', `⚠️ Npm install ogohlantirish: ${npmErr.message}`);
             }
+        } else {
+            addBotLog(botId, 'deploy', `ℹ️ Node.js qo'shimcha tashqi modullari talab qilinmadi.`);
         }
     }
 
@@ -1110,6 +1274,29 @@ async function startBot(botId: string) {
                 ) {
                     addBotLog(botId, 'run', `🚨 TELEGRAM KONFLIKT XATOSI: Ushbu Bot Token boshqa bir joyda (shaxsiy kompyuteringizda yoki boshqa bot sifatida) ayni vaqtda ishlab turibdi! Telegram bir vaqtda faqat 1 ta ulanishga ruxsat beradi.`);
                     addBotLog(botId, 'system', `💡 Yechim: 1) Boshqa joydagi botni to'xtating. 2) Yoki @BotFather orqali yangi token oling.`);
+                    continue;
+                }
+
+                // Check for Telegram Unauthorized / Invalid Token Error
+                if (
+                    line.includes('InvalidToken') ||
+                    line.includes('Token is invalid') ||
+                    line.includes('Unauthorized') ||
+                    line.includes('401 Unauthorized') ||
+                    line.includes('TelegramUnauthorizedError') ||
+                    line.includes('Not Found') && line.includes('api.telegram.org') ||
+                    line.includes('Invalid bot token')
+                ) {
+                    addBotLog(botId, 'run', `🚨 TELEGRAM TOKENI XATO YOKI NAMUNAVIY QOLGAN! (Invalid Token / 401 Unauthorized):`);
+                    addBotLog(botId, 'run', `👉 Telegram serveri ushbu tokenni qabul qilmadi. Bot kodida yoki .env faylida 'YOUR_BOT_TOKEN' kabi namunaviy matn qolgan yoki token noto'g'ri kiritilgan.`);
+                    addBotLog(botId, 'system', `💡 Yechim: Telegramda @BotFather ga kiring, /mybots orqali o'z botingizni tanlang, API tokenni nusxalab, '🔒 Muhit sirlari (.env)' bo'limiga BOT_TOKEN sifatida kiriting.`);
+                    continue;
+                }
+
+                // Check for Module Not Found in Node.js or Python
+                if (line.includes('Cannot find module') || line.includes('ModuleNotFoundError:') || line.includes('ImportError:')) {
+                    addBotLog(botId, 'run', `🚨 ${line}`);
+                    addBotLog(botId, 'system', `💡 Yechim: Kodingizda kerakli kutubxona yetishmayapti. Yuqoridagi "Xatoliklarni tuzatish (Botly AI)" tugmasini bosing — AI avtomatik ravishda barcha kerakli paketlarni o'rnatib kodni to'g'rilaydi.`);
                     continue;
                 }
 
@@ -3307,6 +3494,152 @@ bot.launch().then(() => console.log('Echo boti yoqildi!'));`
         }
       };
 
+      // Helper to dynamically extract and enrich all environment variables from generated code files
+      const enrichCodeSecrets = (files: any[], existingSecrets: any[] = []) => {
+        const detectedKeys = new Map<string, { description?: string; placeholder?: string }>();
+
+        // 1. First add AI provided secrets
+        if (Array.isArray(existingSecrets)) {
+          existingSecrets.forEach(s => {
+            if (s && s.key && typeof s.key === 'string') {
+              const k = s.key.trim().toUpperCase();
+              detectedKeys.set(k, {
+                description: s.description || '',
+                placeholder: s.placeholder || ''
+              });
+            }
+          });
+        }
+
+        // 2. Scan every file content for process.env, os.getenv, os.environ, .env lines
+        if (Array.isArray(files)) {
+          files.forEach(f => {
+            if (!f || !f.content || typeof f.content !== 'string') return;
+            const code = f.content;
+            const fname = (f.filename || '').toLowerCase();
+
+            // .env / .env.example lines
+            if (fname.includes('.env')) {
+              code.split('\n').forEach((l: string) => {
+                let line = l.trim();
+                if (line.startsWith('#')) line = line.substring(1).trim();
+                if (line && line.includes('=')) {
+                  const eq = line.indexOf('=');
+                  const k = line.substring(0, eq).trim().toUpperCase();
+                  const v = line.substring(eq + 1).trim().replace(/^["']|["']$/g, '');
+                  if (k && /^[A-Z0-9_]+$/.test(k)) {
+                    if (!detectedKeys.has(k)) {
+                      detectedKeys.set(k, { placeholder: v });
+                    }
+                  }
+                }
+              });
+            }
+
+            // JavaScript / TypeScript: process.env.KEY or process.env['KEY']
+            const jsMatches = code.matchAll(/process\.env(?:\.([A-Za-z0-9_]+)|\[["']([A-Za-z0-9_]+)["']\])/g);
+            for (const m of jsMatches) {
+              const k = (m[1] || m[2] || '').trim().toUpperCase();
+              if (k && /^[A-Z0-9_]+$/.test(k) && !detectedKeys.has(k)) {
+                detectedKeys.set(k, {});
+              }
+            }
+
+            // Python: os.getenv("KEY"), os.environ.get("KEY"), os.environ["KEY"]
+            const pyMatches = code.matchAll(/(?:os\.(?:getenv|environ\.get|environ\[)|getenv\()\s*["']([A-Za-z0-9_]+)["']/g);
+            for (const m of pyMatches) {
+              const k = (m[1] || '').trim().toUpperCase();
+              if (k && /^[A-Z0-9_]+$/.test(k) && !detectedKeys.has(k)) {
+                detectedKeys.set(k, {});
+              }
+            }
+
+            // Explicit var assignments for keys like BOT_TOKEN, ADMIN_ID, etc.
+            const varDeclMatches = code.matchAll(/(BOT_TOKEN|TELEGRAM_TOKEN|TOKEN|ADMIN_ID|ADMIN_IDS|OWNER_ID|CHANNEL_ID|CHANNEL_USERNAME|CLICK_SERVICE_ID|CLICK_MERCHANT_ID|CLICK_SECRET_KEY|PAYME_MERCHANT_ID|PROVIDER_TOKEN|GEMINI_API_KEY|OPENAI_API_KEY|DATABASE_URL|MONGO_URI|WEATHER_API_KEY)\s*=/gi);
+            for (const m of varDeclMatches) {
+              const k = (m[1] || '').trim().toUpperCase();
+              if (k && !detectedKeys.has(k)) {
+                detectedKeys.set(k, {});
+              }
+            }
+          });
+        }
+
+        // Always ensure BOT_TOKEN and ADMIN_ID are recognized if nothing detected
+        if (!detectedKeys.has('BOT_TOKEN') && !Array.from(detectedKeys.keys()).some(k => /TOKEN/i.test(k))) {
+          detectedKeys.set('BOT_TOKEN', {
+            description: "Telegram botingizning @BotFather dan olingan maxsus token kaliti",
+            placeholder: "123456789:AAH_abcdef..."
+          });
+        }
+        if (!detectedKeys.has('ADMIN_ID') && !Array.from(detectedKeys.keys()).some(k => /ADMIN|OWNER/i.test(k))) {
+          detectedKeys.set('ADMIN_ID', {
+            description: "Boshqaruvchi administratorning Telegram raqamli ID si",
+            placeholder: "508129341"
+          });
+        }
+
+        // Map into full Uzbek descriptor objects
+        const finalSecrets = Array.from(detectedKeys.entries()).map(([key, info]) => {
+          let description = info.description || "";
+          let placeholder = info.placeholder || "";
+
+          if (!description) {
+            if (/BOT_TOKEN|TELEGRAM_TOKEN|BOT_API_TOKEN/i.test(key)) {
+              description = "Telegram botingizning @BotFather dan olingan maxsus API tokeni";
+              placeholder = placeholder || "123456789:AAH_abcdef...";
+            } else if (/ADMIN_ID|ADMINS|ADMIN_IDS|OWNER_ID|SUDO_USERS/i.test(key)) {
+              description = "Boshqaruvchi administratorning Telegram ID raqami";
+              placeholder = placeholder || "508129341";
+            } else if (/CHANNEL_ID|CHANNEL_USERNAME|FORCE_SUB/i.test(key)) {
+              description = "Majburiy a'zolik yoki bildirishnomalar yuboriladigan Telegram kanal ID yoki @username";
+              placeholder = placeholder || "@kanal_nomi yoki -1001234567890";
+            } else if (/CLICK_SERVICE_ID/i.test(key)) {
+              description = "Click to'lov tizimidagi xizmat ID (Service ID)";
+              placeholder = placeholder || "12345";
+            } else if (/CLICK_MERCHANT_ID/i.test(key)) {
+              description = "Click to'lov tizimidagi savdogar ID (Merchant ID)";
+              placeholder = placeholder || "54321";
+            } else if (/CLICK_SECRET_KEY/i.test(key)) {
+              description = "Click to'lov tizimidagi maxfiy kalit (Secret Key)";
+              placeholder = placeholder || "click_sec_key_xyz";
+            } else if (/PAYME_MERCHANT_ID/i.test(key)) {
+              description = "Payme to'lov tizimidagi savdogar ID (Merchant ID)";
+              placeholder = placeholder || "payme_id_123";
+            } else if (/PROVIDER_TOKEN/i.test(key)) {
+              description = "Telegram Payments (@BotFather orqali olingan to'lov provayder tokeni)";
+              placeholder = placeholder || "371317599:TEST:12345";
+            } else if (/GEMINI_API_KEY/i.test(key)) {
+              description = "Google Gemini AI modeli uchun maxsus API kaliti";
+              placeholder = placeholder || "AIzaSy...";
+            } else if (/OPENAI_API_KEY/i.test(key)) {
+              description = "OpenAI ChatGPT modeli uchun maxsus API kaliti";
+              placeholder = placeholder || "sk-...";
+            } else if (/DATABASE_URL|MONGO_URI|DB_URL|REDIS_URL/i.test(key)) {
+              description = "Ma'lumotlar bazasiga ulanish manzili (URL / URI)";
+              placeholder = placeholder || "sqlite:///bot.db yoki mongodb://localhost:27017";
+            } else if (/WEATHER_API_KEY/i.test(key)) {
+              description = "Ob-havo ma'lumotlari xizmatining API kaliti";
+              placeholder = placeholder || "weather_api_key_123";
+            } else if (/API_KEY|SECRET|TOKEN|KEY/i.test(key)) {
+              description = `${key} - Tashqi API xizmati yoki shifrlash maxfiy kaliti`;
+              placeholder = placeholder || "maxfiy_kalit_qiymati";
+            } else {
+              description = `Bot kodida ishlatiladigan atrof-muhit (${key}) o'zgaruvchisi`;
+              placeholder = placeholder || "Qiymatni kiriting...";
+            }
+          }
+
+          return {
+            key,
+            description,
+            placeholder: placeholder || "Qiymatni kiriting..."
+          };
+        });
+
+        return finalSecrets;
+      };
+
       // 1. Try Groq API (High Speed LLaMA-3.3-70b Engine)
       const groq = getGroqClient();
       if (groq) {
@@ -3318,7 +3651,7 @@ Foydalanuvchining so'roviga asosan eng mukammal, xatosiz, har tomonlama mukammal
 Sizga qo'yilgan qat'iy talablar:
 1. **Chala bo'lmagan kod**: Hech qanday joyda mock placeholder-lar, "..." belgilar, chala ketgan qismlar bo'lishi taqiqlanadi!
 2. **Ko'p faylli mukammal arxitektura**: Loyihani faqat bitta faylda emas, balki tartiblangan bir nechta modulli fayllarda yarating (index.js, package.json, .env.example, va h.k).
-3. **Secrets Isolation**: BOT_TOKEN, ADMIN_ID va barcha sirlarni "secrets" to'plamida qaytaring.
+3. **Kodga asoslangan dinamik Secrets**: Kodda ishlatilgan HAR BIR muhit o'zgaruvchisini (process.env.XXX yoki os.getenv("XXX")) - masalan: BOT_TOKEN, ADMIN_ID, CHANNEL_ID (kanal bo'lsa), CLICK_MERCHANT_ID (to'lov bo'lsa), GEMINI_API_KEY (AI bo'lsa), DATABASE_URL va h.k. - aynan kodda qatnashgan barcha o'zgaruvchilarni "secrets" to'plamida to'liq qaytaring!
 4. **To'g'ri String Sintaksisi**: Python va JavaScript kodlarida ko'p qatorli matnlar uchun har doim toza uchlik qo'shtirnoq (\"\"\"...\"\"\") yoki bitta qatorda to'g'ri formatlangan \\n ishlating. Hech qachon qator oxirida yopilmagan qo'shtirnoq qoldirmang (unterminated string literal xatosining oldini oling).
 
 FAQAT ushbu formatdagi valid JSON obyektini qaytaring:
@@ -3329,7 +3662,8 @@ FAQAT ushbu formatdagi valid JSON obyektini qaytaring:
     { "filename": "package.json", "content": "..." }
   ],
   "secrets": [
-    { "key": "BOT_TOKEN", "description": "...", "placeholder": "..." }
+    { "key": "BOT_TOKEN", "description": "...", "placeholder": "..." },
+    { "key": "ADMIN_ID", "description": "...", "placeholder": "..." }
   ]
 }`;
 
@@ -3347,6 +3681,7 @@ FAQAT ushbu formatdagi valid JSON obyektini qaytaring:
             if (rawContent) {
               const parsed = JSON.parse(rawContent);
               if (parsed.explanation && Array.isArray(parsed.files)) {
+                parsed.secrets = enrichCodeSecrets(parsed.files, parsed.secrets);
                 await incrementUsage();
                 console.log("[AI Engine]: Groq llama-3.3-70b Code Expert succeeded.");
                 return res.json(parsed);
@@ -3404,7 +3739,7 @@ Sizga qo'yilgan qat'iy talablar:
 2. **Ko'p faylli mukammal arxitektura**: Loyihani faqat bitta faylda emas, balki tartiblangan bir nechta modulli fayllarda yarating. Masalan:
    - Node.js uchun: 'index.js' (asosiy ishchi yadro), 'package.json' (to'liq dependenciyalar jadvali), '.env.example' (namunaviy maxfiy o'zgaruvchilar), 'commands.js' yoki 'database.js' (yordamchi modullar/xizmatlar).
    - Python uchun: 'main.py' (yadro kodi), 'requirements.txt' (kutubxonalar ro'yxati), 'handlers.py' va '.env.example'.
-3. **Konfiguratsiyani ajratish (Secrets Isolation)**: Har bir loyihada sirlarni (BOT_TOKEN, ADMIN_ID, ma'lumotlar bazasi URL, API kalitlar) kodning o'zidan TO'LIQ ajrating va process.env / osgetenv orqali chaqiring. Barcha sirlarni "secrets" to'plamida qaytaring.
+3. **Kodga asoslangan dinamik Secrets (Secrets Isolation)**: Kodda qanday environment o'zgaruvchilardan (process.env.KEY yoki os.getenv('KEY')) foydalangan bo'lsangiz (masalan: BOT_TOKEN, ADMIN_ID, CHANNEL_ID (kanal obunasi bo'lsa), CLICK_MERCHANT_ID (to'lov bo'lsa), GEMINI_API_KEY (AI bo'lsa), DATABASE_URL va h.k.), ularning HAR BIRINI aynan o'zingiz yozgan kodga qarab "secrets" to'plamida to'liq, o'zbekcha tushuntirishi va namunaviy qiymati bilan qaytaring.
 4. **Mustahkam va chiroyli funksionallik**: Inline tugmachalar, chiroyli Markdown formatlash, jozibali tabriknomalar, mukammal xatoliklarni ushlash (try-catch, global uncaught exceptions) va logerlarni to'liq qo'llang.
 5. **To'g'ri String Sintaksisi (Valid String Literals)**: Python va JavaScript kodlarida ko'p qatorli matnlar uchun har doim toza uchlik qo'shtirnoq (\"\"\"...\"\"\") yoki bitta qatorda to'g'ri formatlangan \\n ishlating. Hech qachon qator oxirida ochiq/yopilmagan qo'shtirnoq qoldirmang (unterminated string literal xatosining oldini oling).`;
 
@@ -3439,8 +3774,8 @@ Sizga qo'yilgan qat'iy talablar:
                     items: {
                       type: Type.OBJECT,
                       properties: {
-                        key: { type: Type.STRING, description: "Muhit o'zgaruvchisining nomi, masalan: BOT_TOKEN, ADMIN_ID, DB_URL" },
-                        description: { type: Type.STRING, description: "Ushbu o'zgaruvchi nima uchun kerakligi haqida izoh" },
+                        key: { type: Type.STRING, description: "Muhit o'zgaruvchisining nomi, masalan: BOT_TOKEN, ADMIN_ID, CHANNEL_ID, CLICK_MERCHANT_ID" },
+                        description: { type: Type.STRING, description: "Ushbu o'zgaruvchi nima uchun kerakligi haqida o'zbekcha izoh" },
                         placeholder: { type: Type.STRING, description: "Namuna yoki default qiymat" }
                       },
                       required: ["key", "description"]
@@ -3456,8 +3791,12 @@ Sizga qo'yilgan qat'iy talablar:
           if (!dataText) {
             throw new Error("Gemini AI'dan bo'sh ma'lumot qaytdi.");
           }
+          const parsedData = JSON.parse(dataText);
+          if (Array.isArray(parsedData.files)) {
+            parsedData.secrets = enrichCodeSecrets(parsedData.files, parsedData.secrets);
+          }
           await incrementUsage();
-          return res.json(JSON.parse(dataText));
+          return res.json(parsedData);
 
         } else {
           const systemInstruction = `Siz do'stona, professional va tajribali CloudBot Platformasi hamrohi (Companion AI) yordamchisiz.

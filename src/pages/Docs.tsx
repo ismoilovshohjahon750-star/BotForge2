@@ -1,16 +1,35 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { BookOpen, Terminal, Rocket, Server, Shield, Code, ChevronRight, Menu, Send, ExternalLink } from 'lucide-react';
+import { 
+  BookOpen, 
+  Terminal, 
+  Rocket, 
+  Server, 
+  Shield, 
+  Code, 
+  ChevronRight, 
+  Menu, 
+  Send, 
+  ExternalLink,
+  FileArchive,
+  CheckCircle2,
+  AlertTriangle,
+  FileCode,
+  Key,
+  FolderArchive,
+  Sparkles,
+  Bot
+} from 'lucide-react';
 import { Button } from '../components/ui/button';
 
 export const Docs: React.FC = () => {
-  const [activeSection, setActiveSection] = useState('about');
+  const [activeSection, setActiveSection] = useState('uploading');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const sections = [
     { id: 'about', title: 'Platforma haqida', icon: <BookOpen className="w-4 h-4" /> },
     { id: 'how-it-works', title: 'Qanday ishlaydi?', icon: <Server className="w-4 h-4" /> },
-    { id: 'uploading', title: 'Bot yuklash', icon: <Rocket className="w-4 h-4" /> },
+    { id: 'uploading', title: 'Bot va .ZIP yuklash tartibi', icon: <Rocket className="w-4 h-4 text-emerald-400" /> },
     { id: 'supported', title: 'Qo\'llab-quvvatlanadigan tillar', icon: <Code className="w-4 h-4" /> },
     { id: 'limits', title: 'Tariflar va Limitlar', icon: <Server className="w-4 h-4" /> },
     { id: 'security', title: 'Xavfsizlik', icon: <Shield className="w-4 h-4" /> },
@@ -124,37 +143,135 @@ export const Docs: React.FC = () => {
           )}
 
           {activeSection === 'uploading' && (
-            <div className="space-y-6">
-              <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-foreground">Bot yuklash tartibi</h1>
-              <p className="text-lg text-muted-foreground leading-relaxed">
-                Quyida yangi botni tizimga qo'shish jarayoni tushuntirilgan.
-              </p>
-              
-              <div className="bg-secondary/50 rounded-xl p-6 border border-border mt-6">
-                <h3 className="text-lg font-medium text-foreground mb-4 flex items-center gap-2">
-                  <ChevronRight className="w-5 h-5 text-primary" />
-                  GitHub orqali import qilish (Tavsiya etiladi)
-                </h3>
-                <ol className="list-decimal list-inside space-y-2 text-muted-foreground ml-2">
-                  <li>Dashboard sahifasiga o'ting va "Yangi Bot" tugmasini bosing.</li>
-                  <li>"GitHub'dan import qilish" bo'limiga repozitoriya havolasini kiriting.</li>
-                  <li>Tizim avtomatik ravishda kodni tahlil qilib, tilni aniqlaydi.</li>
-                  <li>Zarur bo'lgan Environment Variables (masalan, BOT_TOKEN) larni kiriting.</li>
-                  <li>"Saqlash" tugmasini bosing va botingiz darhol ishga tushadi.</li>
-                </ol>
+            <div className="space-y-8">
+              <div>
+                <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-foreground flex items-center gap-3">
+                  <FolderArchive className="w-8 h-8 text-emerald-400" />
+                  <span>Bot va .ZIP arxiv yuklash tartibi</span>
+                </h1>
+                <p className="text-base text-muted-foreground leading-relaxed mt-2">
+                  CloudBot platformasiga o'zingiz yozgan yoki <strong>Claude AI, ChatGPT, DeepSeek</strong> orqali tayyorlangan bot loyihalarini to'liq xatosiz yuklash bo'yicha batafsil qo'llanma.
+                </p>
               </div>
 
-              <div className="bg-secondary/50 rounded-xl p-6 border border-border mt-6">
-                <h3 className="text-lg font-medium text-foreground mb-4 flex items-center gap-2">
-                  <ChevronRight className="w-5 h-5 text-primary" />
-                  ZIP fayl orqali yuklash
-                </h3>
-                <ol className="list-decimal list-inside space-y-2 text-muted-foreground ml-2">
-                  <li>Botingizning barcha fayllarini (<code>node_modules</code> yoki <code>venv</code> papkalarisiz) ZIP formatida arxivlang.</li>
-                  <li>Dashboard sahifasidagi arxiv yuklash oynasiga tashlang.</li>
-                  <li>Tizim kodni ochib, asosiy ishga tushirish faylini (masalan, <code>index.js</code> yoki <code>main.py</code>) qidiradi.</li>
-                  <li>Kerakli maxfiy kalitlarni kiritib, tasdiqlang.</li>
-                </ol>
+              {/* Step by Step Visual Guide */}
+              <div className="space-y-6">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-white/10 pb-3">
+                  <span className="w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">1</span>
+                  <span>ZIP arxivini to'g'ri tayyorlash (Fayllar tuzilishi)</span>
+                </h2>
+
+                <div className="p-5 rounded-2xl bg-card border border-border space-y-4">
+                  <p className="text-sm text-slate-300">
+                    ZIP arxiv ichiga faqat botingizning asosiy kod fayllari kiritilishi kerak. Arxiv hajmini kichik va tezkor qilish uchun quyidagi papkalarni <strong>arxive qo'shmang</strong>:
+                  </p>
+
+                  <div className="grid sm:grid-cols-2 gap-3 text-xs">
+                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                      <p className="font-semibold text-emerald-400 mb-1 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>ZIP ichiga nimalar kirishi kerak:</span>
+                      </p>
+                      <ul className="space-y-1 text-slate-300 font-mono">
+                        <li>• <span className="text-white">index.js</span> yoki <span className="text-white">bot.js</span> (Node.js uchun)</li>
+                        <li>• <span className="text-white">main.py</span> yoki <span className="text-white">bot.py</span> (Python uchun)</li>
+                        <li>• <span className="text-white">package.json</span> (mavjud bo'lsa)</li>
+                        <li>• <span className="text-white">requirements.txt</span> (mavjud bo'lsa)</li>
+                        <li>• <span className="text-white">.env</span> yoki <span className="text-white">.env.example</span></li>
+                      </ul>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20">
+                      <p className="font-semibold text-rose-400 mb-1 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        <span>ZIP ichiga QO'SHILMASLIGI kerak:</span>
+                      </p>
+                      <ul className="space-y-1 text-slate-300 font-mono">
+                        <li>❌ <span className="line-through text-rose-300">node_modules/</span> (ortiqcha og'irlik)</li>
+                        <li>❌ <span className="line-through text-rose-300">.venv/</span> yoki <span className="line-through text-rose-300">venv/</span></li>
+                        <li>❌ <span className="line-through text-rose-300">__pycache__/</span></li>
+                        <li>❌ <span className="line-through text-rose-300">.git/</span> papkasi</li>
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-300 flex items-start gap-2.5">
+                    <Sparkles className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><strong>Avtomatik o'rnatish imkoniyati:</strong> Agar sizda <code>package.json</code> yoki <code>requirements.txt</code> bo'lmasa ham xavotir olmang! CloudBot kodingizni skanerlab barcha kerakli kutubxonalarni (aiogram, telegraf, grammy, pyTelegramBotAPI) avtomatik o'rnatib beradi.</span>
+                  </div>
+                </div>
+
+                <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-white/10 pb-3 pt-2">
+                  <span className="w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">2</span>
+                  <span>Claude AI yoki ChatGPT'dan olingan botlarni sozlash</span>
+                </h2>
+
+                <div className="p-5 rounded-2xl bg-card border border-border space-y-4 text-sm text-slate-300">
+                  <p>
+                    AI yozgan botlar ishga tushganda eng ko'p uchraydigan holat — bu <strong>tokenning namunaviy matn bo'lib qolishi</strong>. Masalan:
+                  </p>
+
+                  <div className="bg-[#0b0c10] p-3 rounded-xl border border-white/10 font-mono text-xs text-slate-300 space-y-1">
+                    <p className="text-rose-400">// ❌ Xato holat (Claude AI shunday yozadi):</p>
+                    <p>const bot = new Telegraf('YOUR_BOT_TOKEN');</p>
+                    <p className="text-emerald-400 mt-2">// ✅ To'g'ri xavfsiz holat:</p>
+                    <p>const bot = new Telegraf(process.env.BOT_TOKEN);</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="font-semibold text-white">Buni qanday to'g'irlash kerak?</p>
+                    <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-300 ml-2">
+                      <li>Telegramda <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">@BotFather</a> ga kiring.</li>
+                      <li><code>/mybots</code> buyrug'ini yuboring va o'z botingizni tanlang.</li>
+                      <li><strong>API Token</strong> tugmasini bosib, maxsus kalitni nusxalang (masalan: <code>7123456789:AAH...</code>).</li>
+                      <li>CloudBot boshqaruv panelidagi <strong>"🔒 Muhit sirlari (.env)"</strong> bo'limiga o'ting va <code>BOT_TOKEN</code> maydoniga ushbu kalitni joylashtiring.</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-white/10 pb-3 pt-2">
+                  <span className="w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">3</span>
+                  <span>Dashboard orqali yuklash va ishga tushirish (Deploy)</span>
+                </h2>
+
+                <div className="p-5 rounded-2xl bg-card border border-border space-y-3 text-sm text-slate-300">
+                  <ol className="list-decimal list-inside space-y-2.5 text-xs sm:text-sm">
+                    <li><strong className="text-white">Boshqaruv (Dashboard)</strong> sahifasiga o'ting va <strong className="text-indigo-400">"Yangi Bot"</strong> tugmasini bosing.</li>
+                    <li><strong className="text-white">"ZIP arxiv yuklash"</strong> maydonchasiga tayyorlangan <code>.zip</code> faylni sudrab tashlang yoki tanlang.</li>
+                    <li>Tizim fayllarni ajratib oladi va asosiy ishga tushirish faylini (Entry Point) avtomatik aniqlaydi.</li>
+                    <li>Bot nomi va tavsifini kiritib, <strong>"Botni yaratish va ishga tushirish"</strong> tugmasini bosing.</li>
+                    <li>Terminal loglar oynasida <code>Starting polling...</code> yoki <code>Bot muvaffaqiyatli ishga tushdi</code> xabarini ko'rishingiz bilan bot Telegramda ishlay boshlaydi!</li>
+                  </ol>
+                </div>
+
+                <h2 className="text-xl font-bold text-white flex items-center gap-2 border-b border-white/10 pb-3 pt-2">
+                  <span className="w-7 h-7 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold">4</span>
+                  <span>Tez-tez uchraydigan xatolar va ularning oson yechimi</span>
+                </h2>
+
+                <div className="space-y-3">
+                  <div className="p-4 rounded-xl bg-card border border-border">
+                    <h4 className="text-sm font-bold text-rose-400 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Xatolik: 401 Unauthorized / Invalid Token</span>
+                    </h4>
+                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                      <strong>Sababi:</strong> @BotFather dan olingan haqiqiy bot tokeni kiritilmagan yoki eskirgan. <br />
+                      <strong>Yechimi:</strong> Dashboard'dagi botingizning <i>"🔒 Muhit sirlari"</i> bo'limiga kirib, yangi tokenni yozing va botni qayta ishga tushiring.
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-card border border-border">
+                    <h4 className="text-sm font-bold text-amber-400 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Xatolik: Cannot find module / ModuleNotFoundError</span>
+                    </h4>
+                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                      <strong>Sababi:</strong> Kodda ishlatilgan tashqi kutubxona fayllar ro'yxatida yetishmayapti.<br />
+                      <strong>Yechimi:</strong> Terminal oynasining yuqori qismidagi <strong>"Xatoliklarni tuzatish (Botly AI)"</strong> tugmasini bosing — sun'iy intellekt kodingizni to'liq tahlil qilib, 1 soniyada barcha paketlarni sozlab beradi.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -179,10 +296,10 @@ export const Docs: React.FC = () => {
                 <div className="bg-card border border-border rounded-lg p-5">
                   <h3 className="text-lg font-semibold text-foreground mb-3 border-b border-border pb-2">Python</h3>
                   <ul className="list-disc list-inside text-muted-foreground space-y-1 text-sm ml-1">
-                    <li>aiogram</li>
-                    <li>python-telegram-bot</li>
+                    <li>aiogram (v2 va v3)</li>
+                    <li>python-telegram-bot (v13 va v20+)</li>
                     <li>discord.py</li>
-                    <li>telebot</li>
+                    <li>pyTelegramBotAPI (telebot)</li>
                   </ul>
                 </div>
               </div>
