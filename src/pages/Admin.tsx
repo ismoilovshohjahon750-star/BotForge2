@@ -112,7 +112,7 @@ export const Admin: React.FC = () => {
         return Array.from(map.values());
       });
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'profiles');
+      console.warn("Profiles snapshot notice (quota or offline):", error?.message || error);
     });
 
     // 2. Fetch Subscriptions in Real-Time
@@ -135,14 +135,14 @@ export const Admin: React.FC = () => {
       setSubscriptions(subsMap);
       setSubDetails(detailsMap);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'subscriptions');
+      console.warn("Subscriptions snapshot notice (quota or offline):", error?.message || error);
     });
 
     // 3. Fetch Bots
     const unsubBots = onSnapshot(collection(db, 'bots'), (snapshot) => {
       setBots(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as BotType)));
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'bots');
+      console.warn("Bots snapshot notice (quota or offline):", error?.message || error);
     });
 
     // 4. Fetch Contact Messages

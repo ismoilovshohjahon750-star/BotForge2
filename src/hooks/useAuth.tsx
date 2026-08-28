@@ -28,51 +28,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('Redirect sign-in check:', err?.message || err);
     });
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       if (user) {
-        // 1. Profilni tekshirish muhandisligi
-        const profileRef = doc(db, 'profiles', user.uid);
-        let profileExists = false;
-        try {
-          const profileSnap = await getDoc(profileRef);
-          profileExists = profileSnap.exists();
-        } catch (e: any) {
-          console.warn('Profile get warning (offline or network):', e?.message || e);
-        }
-
-        // 2. Profilni yaratish yoki yangilash
-        const username = user.displayName || user.email?.split('@')[0] || 'User';
-        const photoURL = user.photoURL || (user.email ? `https://unavatar.io/${encodeURIComponent(user.email)}?fallback=https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=0284c7&color=ffffff&bold=true` : '');
-        try {
-          await safeSetDoc(profileRef, {
-            email: user.email || '',
-            displayName: user.displayName || username,
-            username: username.toLowerCase(),
-            photoURL: photoURL,
-            updatedAt: serverTimestamp()
-          }, { merge: true });
-        } catch (e: any) {
-          console.warn('Profile sync warning:', e?.message || e);
-        }
-
-        // 3. Rolni aniqlash va tekshirish muhandisligi
         if (user.email === 'ismoilovshohjahon750@gmail.com') {
           setIsAdmin(true);
-        } else {
-          const roleRef = doc(db, 'user_roles', user.uid);
+        }
+
+        // Run profile and role sync asynchronously in background without blocking Auth loading
+        (async () => {
           try {
-            const roleSnap = await getDoc(roleRef);
-            if (roleSnap.exists() && roleSnap.data().role === 'admin') {
-              setIsAdmin(true);
-            } else {
-              setIsAdmin(false);
+            const profileRef = doc(db, 'profiles', user.uid);
+            const username = user.displayName || user.email?.split('@')[0] || 'User';
+            const photoURL = user.photoURL || (user.email ? `https://unavatar.io/${encodeURIComponent(user.email)}?fallback=https://ui-avatars.com/api/?name=${encodeURIComponent(username)}&background=0284c7&color=ffffff&bold=true` : '');
+            
+            await safeSetDoc(profileRef, {
+              email: user.email || '',
+              displayName: user.displayName || username,
+              username: username.toLowerCase(),
+              photoURL: photoURL,
+              updatedAt: serverTimestamp()
+            }, { merge: true });
+
+            if (user.email !== 'ismoilovshohjahon750@gmail.com') {
+              const roleRef = doc(db, 'user_roles', user.uid);
+              const roleSnap = await getDoc(roleRef);
+              if (roleSnap.exists() && roleSnap.data().role === 'admin') {
+                setIsAdmin(true);
+              }
             }
           } catch (e: any) {
-            console.warn('User role get warning (offline or network):', e?.message || e);
-            setIsAdmin(false);
+            console.warn('Background profile/role sync notice:', e?.message || e);
           }
-        }
+        })();
       } else {
         setIsAdmin(false);
       }

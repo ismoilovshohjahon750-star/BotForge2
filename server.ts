@@ -802,11 +802,20 @@ async function startBot(botId: string) {
     // 6. Extract zip if code exists
     if (bot.code && Buffer.isBuffer(bot.code) && bot.code.length > 0) {
         try {
-            // Clean old code files before extracting new zip (preserve SQLite databases)
+            // Save existing .env so manual edits or token updates are not lost
+            let existingEnvContent: string | null = null;
+            const envFilePath = path.join(botDir, '.env');
+            if (fs.existsSync(envFilePath)) {
+                try {
+                    existingEnvContent = fs.readFileSync(envFilePath, 'utf8');
+                } catch (e) {}
+            }
+
+            // Clean old code files before extracting new zip (preserve SQLite databases & .env)
             if (fs.existsSync(botDir)) {
                 const existingItems = fs.readdirSync(botDir);
                 for (const item of existingItems) {
-                    if (item.endsWith('.db') || item.endsWith('.sqlite') || item.endsWith('.sqlite3') || item === 'node_modules') continue;
+                    if (item.endsWith('.db') || item.endsWith('.sqlite') || item.endsWith('.sqlite3') || item === 'node_modules' || item === '.env') continue;
                     try {
                         fs.rmSync(path.join(botDir, item), { recursive: true, force: true });
                     } catch (rmErr) {}
@@ -818,6 +827,12 @@ async function startBot(botId: string) {
             addBotLog(botId, 'deploy', `📦 Paket ochilmoqda (Extracting bot.zip)...`);
             const zip = new AdmZip(zipPath);
             zip.extractAllTo(botDir, true);
+
+            // Restore preserved .env if existed
+            if (existingEnvContent && existingEnvContent.trim().length > 0) {
+                fs.writeFileSync(envFilePath, existingEnvContent, 'utf8');
+            }
+
             addBotLog(botId, 'deploy', `✅ Fayllar muvaffaqiyatli ochildi.`);
         } catch (extractError: any) {
             addBotLog(botId, 'system', `⚠️ Extract: ${extractError.message}`);
@@ -1281,17 +1296,18 @@ async function startBot(botId: string) {
 
                 // Check for Telegram Unauthorized / Invalid Token Error
                 if (
+                    line.toLowerCase().includes('invalid token') ||
                     line.includes('InvalidToken') ||
                     line.includes('Token is invalid') ||
                     line.includes('Unauthorized') ||
                     line.includes('401 Unauthorized') ||
                     line.includes('TelegramUnauthorizedError') ||
-                    line.includes('Not Found') && line.includes('api.telegram.org') ||
-                    line.includes('Invalid bot token')
+                    (line.includes('Not Found') && line.includes('api.telegram.org')) ||
+                    line.toLowerCase().includes('invalid bot token')
                 ) {
-                    addBotLog(botId, 'run', `🚨 TELEGRAM TOKENI XATO YOKI NAMUNAVIY QOLGAN! (Invalid Token / 401 Unauthorized):`);
-                    addBotLog(botId, 'run', `👉 Telegram serveri ushbu tokenni qabul qilmadi. Bot kodida yoki .env faylida 'YOUR_BOT_TOKEN' kabi namunaviy matn qolgan yoki token noto'g'ri kiritilgan.`);
-                    addBotLog(botId, 'system', `💡 Yechim: Telegramda @BotFather ga kiring, /mybots orqali o'z botingizni tanlang, API tokenni nusxalab, '🔒 Muhit sirlari (.env)' bo'limiga BOT_TOKEN sifatida kiriting.`);
+                    addBotLog(botId, 'run', `🚨 TELEGRAM TOKENI XATO YOKI BEKOR QILINGAN! (Invalid Token / 401 Unauthorized):`);
+                    addBotLog(botId, 'run', `👉 Telegram serveri ushbu tokenni qabul qilmadi. BotFather'da token yangilangan, bekor qilingan yoki .env faylida noto'g'ri kiritilgan.`);
+                    addBotLog(botId, 'system', `💡 Yechim: Telegramda @BotFather ga kiring, /mybots orqali o'z botingizni tanlang, API tokenni yangilang yoki nusxalang. So'ng Dashboard'da '🔒 Muhit sirlari (.env)' bo'limiga BOT_TOKEN sifatida to'g'ri tokenni kiriting va botni qayta ishga tushiring.`);
                     continue;
                 }
 
@@ -2349,6 +2365,40 @@ async function startServer() {
     } catch (error: any) {
       console.error("Bot delete error:", error);
       return res.status(500).json({ error: "Botni o'chirishda xatolik yuz berdi" });
+    }
+  });
+
+  // Barcha botlar ro'yxatini olish (SQLite / REST API fallback)
+  app.get("/api/bots", requireAuth, async (req: AuthRequest, res) => {
+    const userId = req.user?.uid || '';
+    const userEmail = req.user?.email || '';
+    const isAdmin = userEmail === 'ismoilovshohjahon750@gmail.com';
+
+    try {
+      let rows: any[] = [];
+      if (isAdmin) {
+        rows = db.prepare('SELECT id, owner_id as userId, name, language, entryPoint, status FROM bots').all();
+      } else {
+        rows = db.prepare('SELECT id, owner_id as userId, name, language, entryPoint, status FROM bots WHERE owner_id = ?').all(userId);
+      }
+      
+      const bots = rows.map(r => {
+        const isRunning = runningBots.has(r.id);
+        return {
+          id: r.id,
+          userId: r.userId,
+          name: r.name || 'Nomsiz Bot',
+          language: r.language || 'python',
+          entryPoint: r.entryPoint || 'bot.py',
+          status: isRunning ? 'running' : (r.status || 'stopped'),
+          userEmail: req.user?.email || ''
+        };
+      });
+
+      return res.json({ bots });
+    } catch (error) {
+      console.error("Botlar ro'yxatini olishda xato:", error);
+      return res.status(500).json({ error: "Botlar ro'yxatini yuklab bo'lmadi" });
     }
   });
 

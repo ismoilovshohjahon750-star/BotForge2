@@ -345,18 +345,69 @@ export const Dashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    const fetchFromApi = async () => {
+      try {
+        const token = await user.getIdToken();
+        const res = await fetch('/api/bots', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.bots && isMounted) {
+            setBots(data.bots);
+          }
+        }
+      } catch (err) {
+        console.warn('API bots fetch warning:', err);
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    // First, try loading via API immediately
+    fetchFromApi();
+
+    // Safety fallback: never keep Dashboard on full-screen loading for more than 500ms
+    const fallbackTimer = setTimeout(() => {
+      if (isMounted) setLoading(false);
+    }, 500);
 
     const q = query(collection(db, 'bots'), where('userId', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const botsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Bot));
-      setBots(botsData);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'bots');
-    });
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const botsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Bot));
+        if (botsData.length > 0) {
+          setBots(botsData);
+        }
+        if (isMounted) setLoading(false);
+      }, (error) => {
+        console.warn("Firestore bots listener notice:", error?.message || error);
+        fetchFromApi();
+        if (isMounted) setLoading(false);
+      });
+    } catch (e) {
+      console.warn("Firestore subscription catch:", e);
+      fetchFromApi();
+      if (isMounted) setLoading(false);
+    }
 
-    return () => unsubscribe();
+    const interval = setInterval(fetchFromApi, 6000);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(fallbackTimer);
+      unsubscribe();
+      clearInterval(interval);
+    };
   }, [user]);
 
   const handleUpload = async (e: React.FormEvent) => {
