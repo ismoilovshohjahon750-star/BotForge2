@@ -85,6 +85,8 @@ function createOrRepairDatabase(dbPath: string) {
   const openAndSetup = () => {
     const database = new Database(dbPath);
     database.pragma('journal_mode = WAL');
+    database.pragma('busy_timeout = 10000');
+    database.pragma('synchronous = NORMAL');
     database.exec(`CREATE TABLE IF NOT EXISTS bots (
         id TEXT PRIMARY KEY,
         owner_id TEXT,
@@ -1574,6 +1576,50 @@ function getGeminiClient(): GoogleGenAI {
     return aiClient;
 }
 
+async function callGeminiContentWithFallback(params: {
+    contents: any;
+    config?: any;
+    preferredModel?: string;
+}): Promise<{ text?: string }> {
+    const defaultModels = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-2.5-pro"
+    ];
+
+    const modelsToTry = params.preferredModel 
+        ? [params.preferredModel, ...defaultModels.filter(m => m !== params.preferredModel)]
+        : defaultModels;
+
+    let lastError: any = null;
+
+    for (const modelName of modelsToTry) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const client = getGeminiClient();
+                const response = await client.models.generateContent({
+                    model: modelName,
+                    contents: params.contents,
+                    config: params.config
+                });
+                if (response && response.text) {
+                    return response;
+                }
+            } catch (err: any) {
+                lastError = err;
+                const rawErr = err?.message || String(err);
+                console.warn(`[Gemini Model Fallback]: ${modelName} (attempt ${attempt + 1}) failed: ${rawErr.slice(0, 120)}. Rotating key...`);
+                rotateGeminiKey();
+                await new Promise(r => setTimeout(r, 400));
+            }
+        }
+    }
+
+    throw lastError || new Error("Barcha Gemini zaxira modellarida so'rovni bajarib bo'lmadi.");
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -2428,8 +2474,8 @@ async function startServer() {
 
 Vazifangiz:
 1. Taqdim etilgan so'nggi loglar va bot kodidagi barcha xatoliklarni (SyntaxError, IndentationError, NameError, ImportError, TypeError, Telegram API xatoliklari, token/konfiguratsiya xatoliklari, unclosed quotes, async/await xatolari va h.k.) aniqlang.
-2. Xatolik mavjud bo'lgan fayllarni 100% to'g'ri, to'liq, mukammal va ishlab chiqarishga tayyor holatda tuzatib qaytaring.
-3. Hech qachon chala kod, "..." yoki placeholder yozmang! Faylning to'liq ishchi kodini taqdim eting.
+2. MUHIM: FAQAT va FAQAT XATOSI BOR yoki TUZATILISHI SHART BO'LGAN fayllarni "fixedFiles" massivida qaytaring! O'zgarmaydigan, to'g'ri ishlayotgan fayllarni "fixedFiles" massiviga QO'SHMANG. Bu katta loyihalarda javob qisqarib ketishining oldini oladi.
+3. KATTA FAYLLAR UCHUN O'TA MUHIM QAIDA: Hech qachon kodni "# ... rest of code unchanged", "# ... (eski kod qoladi)", "// ... rest of code" yoki "..." deb qisqartirmang! "fixedFiles" ichidagi har bir fayl kodi 100% to'liq, mukammal va sintaktik to'g'ri ishchi kod bo'lishi shart.
 4. Agar yangi kutubxona kerak bo'lsa requirements.txt yoki package.json ga ham qo'shing.
 5. Python-Telegram-Bot, Aiogram, Pyrogram, Telegraf yoki GrammY botlarida xatoliklarni ushlovchi global error handlerlarni xavfsiz integratsiya qiling.
 
@@ -2439,7 +2485,7 @@ Javobni FAQAT ushbu formatdagi JSON ko'rinishida bering:
   "fixedFiles": [
     {
       "filename": "fayl_nomi (masalan: main.py)",
-      "content": "faylning to'liq tuzatilgan kodi"
+      "content": "faylning 100% to'liq tuzatilgan kodi (hech qanday '...' yoki chala kodsiz)"
     }
   ]
 }`;
@@ -2449,7 +2495,7 @@ Javobni FAQAT ushbu formatdagi JSON ko'rinishida bering:
       let explanation = "";
       let fixedFiles: { filename: string; content: string }[] = [];
 
-      // 1. Try Groq LLaMA first
+      // 1. Try Groq LLaMA first with explicit max_tokens: 8192
       const groq = getGroqClient();
       if (groq) {
         try {
@@ -2460,7 +2506,8 @@ Javobni FAQAT ushbu formatdagi JSON ko'rinishida bering:
             ],
             model: "llama-3.3-70b-versatile",
             response_format: { type: "json_object" },
-            temperature: 0.1
+            temperature: 0.1,
+            max_tokens: 8192
           });
           const raw = completion.choices[0]?.message?.content;
           if (raw) {
@@ -2472,45 +2519,49 @@ Javobni FAQAT ushbu formatdagi JSON ko'rinishida bering:
             }
           }
         } catch (groqErr) {
-          console.warn("[Botly AI Fix]: Groq failed, switching to Gemini:", groqErr);
+          console.warn("[Botly AI Fix]: Groq failed or output truncated, switching to Gemini:", groqErr);
         }
       }
 
-      // 2. Gemini fallback / primary
+      // 2. Gemini fallback / primary with maxOutputTokens: 8192 and model fallbacks
       if (fixedFiles.length === 0) {
-        const client = getGeminiClient();
-        const geminiRes = await client.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: userPrompt,
-          config: {
-            systemInstruction,
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                explanation: { type: Type.STRING, description: "Tuzatilgan xatoliklar haqida izoh" },
-                fixedFiles: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      filename: { type: Type.STRING },
-                      content: { type: Type.STRING }
-                    },
-                    required: ["filename", "content"]
+        try {
+          const geminiRes = await callGeminiContentWithFallback({
+            preferredModel: "gemini-2.5-flash",
+            contents: userPrompt,
+            config: {
+              systemInstruction,
+              maxOutputTokens: 8192,
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  explanation: { type: Type.STRING, description: "Tuzatilgan xatoliklar haqida izoh" },
+                  fixedFiles: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        filename: { type: Type.STRING },
+                        content: { type: Type.STRING }
+                      },
+                      required: ["filename", "content"]
+                    }
                   }
-                }
-              },
-              required: ["explanation", "fixedFiles"]
+                },
+                required: ["explanation", "fixedFiles"]
+              }
             }
-          }
-        });
+          });
 
-        const raw = geminiRes.text;
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          explanation = parsed.explanation || "Xatoliklar muvaffaqiyatli tuzatildi";
-          fixedFiles = parsed.fixedFiles || [];
+          const raw = geminiRes.text;
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            explanation = parsed.explanation || "Xatoliklar muvaffaqiyatli tuzatildi";
+            fixedFiles = parsed.fixedFiles || [];
+          }
+        } catch (geminiErr: any) {
+          console.error("[Botly AI Fix]: Gemini fallback pipeline failed:", geminiErr);
         }
       }
 
@@ -2518,14 +2569,32 @@ Javobni FAQAT ushbu formatdagi JSON ko'rinishida bering:
         return res.status(500).json({ error: "AI kodni tuzatishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring." });
       }
 
-      // 5. Tuzatilgan fayllarni diskka yozish
+      // 5. Sanity check & Tuzatilgan fayllarni diskka yozish (Chala kod / '...' placeholder larni rad etish)
+      const validFixedFiles: { filename: string; content: string }[] = [];
+      const truncationRegex = /(#|\/\/|\/\*)\s*(\.\.\.|rest of|eski kod|remaining code|unchanged)/i;
+
       for (const f of fixedFiles) {
+        if (!f.filename || !f.content || typeof f.content !== 'string') continue;
+
+        // original content
+        const origFile = botFiles.find(bf => bf.filename === f.filename);
+        if (origFile && origFile.content.length > 200 && f.content.length < origFile.content.length * 0.4 && truncationRegex.test(f.content)) {
+          console.warn(`[Botly AI Fix]: Warning! Rejecting truncated AI output for file ${f.filename} (contained placeholder marker)`);
+          addBotLog(id, 'system', `⚠️ [Botly AI]: ${f.filename} fayli uchun AI javobida chala qisqartirish sezildi va xavfsizlik uchun rad etildi.`);
+          continue;
+        }
+
         const targetPath = path.join(botDir, f.filename);
         const targetParent = path.dirname(targetPath);
         if (!fs.existsSync(targetParent)) {
           fs.mkdirSync(targetParent, { recursive: true });
         }
         fs.writeFileSync(targetPath, f.content, 'utf8');
+        validFixedFiles.push(f);
+      }
+
+      if (validFixedFiles.length === 0) {
+        return res.status(500).json({ error: "AI taqdim etgan tuzatishlarda chala qisqartirishlar aniqlandi. Iltimos, qaytadan 'Fix Errors' tugmasini bosing." });
       }
 
       // 6. Zip ni qayta yaratish va SQLite hamda Firestore ni yangilash
@@ -2575,7 +2644,21 @@ Javobni FAQAT ushbu formatdagi JSON ko'rinishida bering:
       });
     } catch (err: any) {
       console.error("Botly AI Fix Errors API failure:", err);
-      res.status(500).json({ error: "Xatoliklarni tuzatishda xatolik yuz berdi: " + (err.message || err) });
+      let errMsg = err?.message || String(err);
+      if (typeof errMsg === 'string' && errMsg.includes('{')) {
+        try {
+          const parsed = JSON.parse(errMsg);
+          if (parsed?.error?.message) {
+            errMsg = parsed.error.message;
+          }
+        } catch (e) {}
+      }
+      if (errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('UNAVAILABLE')) {
+        errMsg = "Sun'iy intellekt xizmati (Gemini API) ayni vaqtda juda band (503 High Demand). Iltimos, 1-2 daqiqadan so'ng 'Fix Errors' tugmasini qayta bosing.";
+      } else if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
+        errMsg = "AI kunlik so'rovlar limitiga yetdi (Rate Limit: 429). Iltimos, birozdan so'ng qayta urinib ko'ring.";
+      }
+      res.status(500).json({ error: "Xatoliklarni tuzatishda xatolik yuz berdi: " + errMsg });
     }
   });
 
@@ -3743,8 +3826,8 @@ Sizga qo'yilgan qat'iy talablar:
 4. **Mustahkam va chiroyli funksionallik**: Inline tugmachalar, chiroyli Markdown formatlash, jozibali tabriknomalar, mukammal xatoliklarni ushlash (try-catch, global uncaught exceptions) va logerlarni to'liq qo'llang.
 5. **To'g'ri String Sintaksisi (Valid String Literals)**: Python va JavaScript kodlarida ko'p qatorli matnlar uchun har doim toza uchlik qo'shtirnoq (\"\"\"...\"\"\") yoki bitta qatorda to'g'ri formatlangan \\n ishlating. Hech qachon qator oxirida ochiq/yopilmagan qo'shtirnoq qoldirmang (unterminated string literal xatosining oldini oling).`;
 
-          const response = await client.models.generateContent({
-            model: "gemini-2.5-flash",
+          const response = await callGeminiContentWithFallback({
+            preferredModel: "gemini-2.5-flash",
             contents: prompt,
             config: {
               systemInstruction,
@@ -3819,8 +3902,8 @@ Bizning platforma tuzilishi va imkoniyatlari quyidagicha:
           }
           contents.push({ role: 'user', parts: [{ text: prompt }] });
 
-          const response = await client.models.generateContent({
-            model: "gemini-2.5-flash",
+          const response = await callGeminiContentWithFallback({
+            preferredModel: "gemini-2.5-flash",
             contents: contents,
             config: {
               systemInstruction
