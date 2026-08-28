@@ -83,28 +83,58 @@ function createOrRepairDatabase(dbPath: string) {
   };
 
   const openAndSetup = () => {
-    const database = new Database(dbPath);
-    database.pragma('journal_mode = WAL');
-    database.pragma('busy_timeout = 10000');
-    database.pragma('synchronous = NORMAL');
-    database.exec(`CREATE TABLE IF NOT EXISTS bots (
-        id TEXT PRIMARY KEY,
-        owner_id TEXT,
-        name TEXT,
-        language TEXT,
-        entryPoint TEXT,
-        code BLOB,
-        status TEXT DEFAULT 'stopped'
-    )`);
+    let database: any = null;
+    try {
+      database = new Database(dbPath);
+      database.pragma('journal_mode = WAL');
+      database.pragma('busy_timeout = 10000');
+      database.pragma('synchronous = NORMAL');
 
-    database.exec(`CREATE TABLE IF NOT EXISTS bot_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        bot_id TEXT,
-        type TEXT,
-        message TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )`);
-    return database;
+      // 1. Quick integrity check
+      const check = database.pragma('quick_check') as any[];
+      if (check && check.length > 0) {
+        const firstRow = check[0];
+        const status = firstRow.quick_check || firstRow.integrity_check || (typeof firstRow === 'string' ? firstRow : '');
+        if (status && status !== 'ok') {
+          throw new Error(`Integrity check reported: ${status}`);
+        }
+      }
+
+      // 2. Ensure schema
+      database.exec(`CREATE TABLE IF NOT EXISTS bots (
+          id TEXT PRIMARY KEY,
+          owner_id TEXT,
+          name TEXT,
+          language TEXT,
+          entryPoint TEXT,
+          code BLOB,
+          status TEXT DEFAULT 'stopped'
+      )`);
+
+      database.exec(`CREATE TABLE IF NOT EXISTS bot_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          bot_id TEXT,
+          type TEXT,
+          message TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`);
+
+      // 3. Test queries on all tables and indexes to catch disk image malformed errors early
+      database.prepare("SELECT count(*) FROM bots").get();
+      database.prepare("SELECT id, status FROM bots LIMIT 1").all();
+      database.prepare("SELECT count(*) FROM bot_logs").get();
+      
+      try {
+        database.pragma('wal_checkpoint(TRUNCATE)');
+      } catch (_) {}
+
+      return database;
+    } catch (err) {
+      if (database) {
+        try { database.close(); } catch (_) {}
+      }
+      throw err;
+    }
   };
 
   try {
